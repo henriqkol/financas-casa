@@ -3,8 +3,8 @@
 App de controle financeiro doméstico do Rique (e da esposa). Tudo em português.
 
 ## Arquitetura
-- `app/` — PWA sem build (ES modules, supabase-js via jsdelivr). Publicado no GitHub Pages pelo workflow `publicar-app.yml` a cada push em `main` que mexa em `app/`.
-- `supabase/migrations/` — esquema do Postgres (Supabase, região São Paulo). RLS: só e-mails em `membros` veem dados; `app_config` só o servidor lê.
+- `app/` — PWA sem build (ES modules, supabase-js via jsdelivr). Publicado em https://henriqkol.github.io/financas-casa/ : o workflow `publicar-app.yml` copia `app/` para o ramo `gh-pages` a cada push em `main`.
+- `supabase/migrations/` — esquema do Postgres (Supabase, projeto `hisraarbwhuhovommgqo`, região São Paulo). RLS: só e-mails em `membros` veem dados; `app_config` só o servidor lê.
 - `supabase/functions/api/` — Edge Function única (Deno) com rotas `/nfce`, `/sync`, `/vincular`, `/categorizar-*`, `/config`… Deploy com `verify_jwt = false` (a função valida o JWT e o segredo do cron por conta própria).
 - `tests/` — testes da lógica pura: `node --experimental-strip-types --test tests/logica.test.ts`.
 
