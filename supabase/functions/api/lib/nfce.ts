@@ -217,7 +217,9 @@ export function extrairDoPortal(html: string): NotaExtraida {
     else if (/valor a pagar/.test(r)) valorPago = numeroBR(par.valor);
     else if (/forma de pagamento/.test(r)) depoisDeForma = true;
     else if (/troco/.test(r)) { /* ignora */ }
-    else if (depoisDeForma || /class=["']tx["']/.test(par.attrs)) formas.push(par.rotulo);
+    else if (/class=["']tx["']/.test(par.attrs) || (depoisDeForma && !/class=/.test(par.attrs))) {
+      if ((numeroBR(par.valor) ?? 0) > 0) formas.push(par.rotulo);
+    }
   }
   if (valorPago == null) {
     const txMax = primeiro(html, /<span[^>]*class=["'][^"']*totalNumb[^"']*txtMax[^"']*["'][^>]*>([\s\S]*?)<\/span>/i);

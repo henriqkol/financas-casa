@@ -287,7 +287,7 @@ group by 1, 2, 3;
 comment on view v_resumo_mensal is 'Total gasto por mês e categoria (só o que conta como gasto).';
 
 create or replace view v_itens_comprados with (security_invoker = true) as
-select n.emissao::date as data, to_char(n.emissao, 'YYYY-MM') as mes,
+select (n.emissao at time zone 'America/Sao_Paulo')::date as data, to_char(n.emissao at time zone 'America/Sao_Paulo', 'YYYY-MM') as mes,
        n.nome_emitente as loja, n.cnpj_emitente,
        i.descricao, i.descricao_norm, i.quantidade, i.unidade, i.valor_unitario, i.valor_total,
        coalesce(c.nome, 'Sem categoria') as categoria, n.id as nota_id
@@ -297,7 +297,7 @@ left join categorias c on c.id = i.categoria_id;
 comment on view v_itens_comprados is 'Todos os produtos comprados (das notas fiscais). Útil para comparar preços entre lojas e acompanhar consumo de produtos.';
 
 create or replace view v_pendencias with (security_invoker = true) as
-select 'nota_sem_gasto' as tipo, n.id::text as id, n.emissao::date as data,
+select 'nota_sem_gasto' as tipo, n.id::text as id, (n.emissao at time zone 'America/Sao_Paulo')::date as data,
        n.nome_emitente as descricao, n.valor_pago as valor
 from notas n where n.vinculo_status in ('pendente','confirmar')
 union all
