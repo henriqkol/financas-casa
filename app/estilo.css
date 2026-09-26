@@ -243,3 +243,26 @@ body.oculto .priv-svg { visibility: hidden; }
 .topo:has(.olho) .seletor-mes button { width: 28px; }
 .priv-aviso, body.oculto .priv-bloco { display: none; }
 body.oculto .priv-aviso { display: block; margin: 8px 0 0; }
+
+/* Evolução: despesas, receitas e investimentos */
+.s-desp { --cor-s: #eb6834; } .s-rec { --cor-s: #1baf7a; } .s-inv { --cor-s: #2a78d6; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .s-desp { --cor-s: #d95926; } :root:not([data-theme="light"]) .s-rec { --cor-s: #199e70; } :root:not([data-theme="light"]) .s-inv { --cor-s: #3987e5; } }
+:root[data-theme="dark"] .s-desp { --cor-s: #d95926; } :root[data-theme="dark"] .s-rec { --cor-s: #199e70; } :root[data-theme="dark"] .s-inv { --cor-s: #3987e5; }
+.seg-peq { margin: 4px 0 10px; } .seg-peq button { padding: 5px 4px; font-size: 12.5px; }
+.legenda-evo { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12.5px; color: var(--texto-2); margin-bottom: 6px; }
+.legenda-evo span { display: inline-flex; align-items: center; gap: 6px; }
+.legenda-evo strong { color: var(--texto); font-weight: 600; }
+.legenda-evo i, .dica-evo i { width: 14px; height: 3px; border-radius: 2px; background: var(--cor-s); display: inline-block; flex: none; }
+.legenda-evo i.s-inv, .dica-evo i.s-inv { background: repeating-linear-gradient(90deg, var(--cor-s) 0 5px, transparent 5px 8px); }
+.grafico-evo { position: relative; }
+.grafico-evo svg { width: 100%; height: auto; display: block; touch-action: pan-y; }
+.grafico-evo .grade { stroke: var(--borda); stroke-width: 1; }
+.grafico-evo .eixo { fill: var(--texto-3); font-size: 11px; font-variant-numeric: tabular-nums; }
+.grafico-evo .linha-evo { fill: none; stroke: var(--cor-s); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.grafico-evo .linha-evo.s-inv { stroke-dasharray: 6 4; }
+.grafico-evo .cursor { stroke: var(--texto-3); stroke-width: 1; stroke-dasharray: 3 3; vector-effect: non-scaling-stroke; }
+.grafico-evo .marc-evo { fill: var(--cor-s); stroke: var(--superficie); stroke-width: 2; }
+.dica-evo { position: absolute; top: 0; width: 180px; background: var(--superficie); border: 1px solid var(--borda); border-radius: 8px; padding: 6px 8px; box-shadow: var(--sombra); font-size: 12px; pointer-events: none; }
+.dica-evo > span { color: var(--texto-2); display: block; margin-bottom: 2px; }
+.dica-evo .l { display: flex; align-items: center; gap: 6px; color: var(--texto-2); }
+.dica-evo .l strong { margin-left: auto; color: var(--texto); }

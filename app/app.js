@@ -241,6 +241,12 @@ async function telaInicio() {
       ${total > 0 ? `<div class="compara">${Math.round((comNota / total) * 100)}% do valor tem nota fiscal detalhada</div>` : ""}
       ${totalReceitas > 0 ? `<div class="compara">Entrou ${Rp(totalReceitas)} · ${totalReceitas - total >= 0 ? `sobrou <span class="desce">${Rp(totalReceitas - total)}</span>` : `faltou <span class="sobe">${Rp(total - totalReceitas)}</span>`}</div>` : ""}
     </div>
+    <div class="cartao" id="cartaoEvolucao">
+      <h3>Evolução</h3>
+      <div class="seg seg-peq">${PERIODOS_EVO.map(([k, n]) => `<button data-acao="periodoEvo" data-p="${k}">${n}</button>`).join("")}</div>
+      <p class="nota-texto priv-aviso">Gráfico oculto. Toque no olho para ver.</p>
+      <div class="corpo-evo priv-bloco"><div class="nota-texto"><span class="spinner peq"></span> Montando o gráfico…</div></div>
+    </div>
     <div class="cartao" id="cartaoSugestoes" data-acao="irSugestoes" style="cursor:pointer">
       <h3>Sugestões</h3><div class="nota-texto"><span class="spinner peq"></span> Analisando suas finanças…</div>
     </div>
@@ -291,8 +297,153 @@ async function telaInicio() {
         <div class="meta">${sync ? `Atualizado ${haQuanto(sync.fim ?? sync.inicio)}${sync.ok === false ? ` · <span class="erro-texto">${esc(sync.mensagem ?? "erro")}</span>` : ""}` : "Ainda não sincronizado"}</div></div>
         <button class="botao peq sec" data-acao="sincronizar">Sincronizar</button></div>
     </div>`;
+  carregarEvolucao();
   carregarResumoSugestoes();
 }
+// ---------- Gráfico de evolução (despesas, receitas, investimentos)
+const SERIES_EVO = [
+  { k: "despesas", nome: "Despesas", cls: "s-desp" },
+  { k: "receitas", nome: "Receitas", cls: "s-rec" },
+  { k: "invest", nome: "Investimentos", cls: "s-inv" },
+];
+const PERIODOS_EVO = [["12m", "1 ano"], ["6m", "6 meses"], ["3m", "3 meses"], ["1m", "1 mês"]];
+function isoDia(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; }
+function somarDias(dia, n) { const d = new Date(dia + "T12:00:00"); d.setDate(d.getDate() + n); return isoDia(d); }
+
+async function dadosEvolucao() {
+  if (estado.evo && Date.now() - estado.evo.em < 5 * 60000) return estado.evo;
+  const hoje = isoDia(new Date());
+  const inicio = somarMes(mesAtual(), -11) + "-01";
+  const [g, r, inv] = await Promise.all([
+    todas(() => sb.from("v_gastos").select("data, valor").eq("conta_como_gasto", true).gte("data", inicio)),
+    todas(() => sb.from("v_receitas").select("data, valor").gte("data", inicio)).catch(() => []),
+    todas(() => sb.from("v_investimentos_historico").select("dia, saldo_liquido").order("dia")).catch(() => []),
+  ]);
+  estado.evo = { em: Date.now(), hoje, gastos: g, receitas: r, invest: inv };
+  return estado.evo;
+}
+
+/** Agrupa em baldes conforme o período: meses (1 ano / 6 meses), semanas (3 meses) ou dias acumulados (1 mês). */
+function baldesEvolucao(dd, periodo) {
+  const hoje = dd.hoje;
+  let baldes;
+  if (periodo === "12m" || periodo === "6m") {
+    const n = periodo === "12m" ? 12 : 6;
+    baldes = Array.from({ length: n }, (_, i) => {
+      const m = somarMes(mesAtual(), i - n + 1);
+      const fim = i === n - 1 ? hoje : somarDias(somarMes(m, 1) + "-01", -1);
+      return { ini: m + "-01", fim, rot: maiuscula(nomeMes(m).split(" ")[0].slice(0, 3)), dica: maiuscula(nomeMes(m)) + (i === n - 1 ? " (até hoje)" : "") };
+    });
+  } else if (periodo === "3m") {
+    baldes = Array.from({ length: 13 }, (_, i) => {
+      const fim = somarDias(hoje, -7 * (12 - i)), ini = somarDias(fim, -6);
+      return { ini, fim, rot: dataCurta(fim).slice(0, 5), dica: `Semana de ${dataCurta(ini).slice(0, 5)} a ${dataCurta(fim).slice(0, 5)}` };
+    });
+  } else {
+    baldes = Array.from({ length: 30 }, (_, i) => {
+      const dia = somarDias(hoje, i - 29);
+      return { ini: dia, fim: dia, rot: dataCurta(dia).slice(0, 5), dica: dataCurta(dia) };
+    });
+  }
+  const acumulado = periodo === "1m";
+  const somar = (lista, campo) => baldes.map((b) => lista.filter((x) => x[campo] >= b.ini && x[campo] <= b.fim).reduce((s, x) => s + Number(x.valor), 0));
+  let desp = somar(dd.gastos, "data"), rec = somar(dd.receitas, "data");
+  if (acumulado) {
+    let a = 0, c = 0;
+    desp = desp.map((v) => (a += v)); rec = rec.map((v) => (c += v));
+  }
+  // Investimentos: saldo na última fotografia até o fim de cada balde (vazio antes da primeira)
+  const inv = baldes.map((b) => {
+    let ult = null;
+    for (const h of dd.invest) { if (h.dia <= b.fim) ult = Number(h.saldo_liquido); else break; }
+    return ult;
+  });
+  return { baldes, acumulado, series: { despesas: desp, receitas: rec, invest: inv } };
+}
+
+function fmtEixo(v) {
+  const a = Math.abs(v);
+  if (a >= 1000) return (v / 1000).toLocaleString("pt-BR", { maximumFractionDigits: a >= 10000 ? 0 : 1 }) + " mil";
+  return v.toLocaleString("pt-BR", { maximumFractionDigits: 0 });
+}
+
+function graficoEvolucao(ev) {
+  const W = 360, H = 180, pe = 38, pd = 8, pt = 10, pb = 22;
+  const n = ev.baldes.length;
+  const todos = SERIES_EVO.flatMap((s) => ev.series[s.k]).filter((v) => v != null);
+  let max = Math.max(...todos, 1);
+  const passo = Math.pow(10, Math.floor(Math.log10(max)));
+  max = Math.ceil(max / passo) * passo;
+  const x = (i) => pe + (n === 1 ? 0 : (i * (W - pe - pd)) / (n - 1));
+  const y = (v) => pt + (1 - v / max) * (H - pt - pb);
+  const caminho = (vals) => {
+    let d = "", aberto = false;
+    vals.forEach((v, i) => {
+      if (v == null) { aberto = false; return; }
+      d += `${aberto ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)} `; aberto = true;
+    });
+    return d.trim();
+  };
+  const ticks = [0, max / 2, max];
+  const idxRot = n <= 6 ? [...Array(n).keys()] : [0, Math.round((n - 1) / 3), Math.round((2 * (n - 1)) / 3), n - 1];
+  const dados = esc(JSON.stringify(ev.baldes.map((b, i) => ({ x: x(i), d: b.dica, v: SERIES_EVO.map((s) => ev.series[s.k][i]), y: SERIES_EVO.map((s) => ev.series[s.k][i] == null ? null : y(ev.series[s.k][i])) }))));
+  return `
+    <div class="legenda-evo">${SERIES_EVO.map((s) => `<span><i class="${s.cls}"></i>${s.nome}</span>`).join("")}</div>
+    <div class="grafico-evo" data-pontos="${dados}" data-w="${W}">
+    <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Despesas, receitas e investimentos no período">
+      ${ticks.map((t) => `<line x1="${pe}" x2="${W - pd}" y1="${y(t)}" y2="${y(t)}" class="grade"/><text x="${pe - 6}" y="${y(t) + 4}" text-anchor="end" class="eixo">${fmtEixo(t)}</text>`).join("")}
+      ${idxRot.map((i) => `<text x="${x(i)}" y="${H - 6}" text-anchor="${i === 0 ? "start" : i === n - 1 ? "end" : "middle"}" class="eixo">${esc(ev.baldes[i].rot)}</text>`).join("")}
+      ${SERIES_EVO.map((s) => `<path d="${caminho(ev.series[s.k])}" class="linha-evo ${s.cls}"/>`).join("")}
+      <line class="cursor" y1="${pt}" y2="${H - pb}" x1="0" x2="0" visibility="hidden"/>
+      ${SERIES_EVO.map((s) => `<circle class="marc-evo ${s.cls}" r="5" visibility="hidden"/>`).join("")}
+      <rect x="0" y="0" width="${W}" height="${H}" fill="transparent"/>
+    </svg>
+    <div class="dica dica-evo" hidden></div></div>
+    <p class="nota-texto" style="margin:6px 0 0">${ev.acumulado ? "Despesas e receitas somadas desde o início do período." : `Despesas e receitas somadas por ${n === 13 ? "semana" : "mês"}.`} Investimentos: saldo no fim de cada ${ev.acumulado ? "dia" : n === 13 ? "semana" : "mês"}${ev.series.invest.some((v) => v == null) ? " (o histórico começa na primeira sincronização)" : ""}.</p>`;
+}
+
+function ativarGraficoEvolucao(g) {
+  const pts = JSON.parse(g.dataset.pontos);
+  const svg = g.querySelector("svg"), dica = g.querySelector(".dica");
+  const cursor = svg.querySelector(".cursor"), marcs = [...svg.querySelectorAll(".marc-evo")];
+  const mover = (ev) => {
+    const r = svg.getBoundingClientRect();
+    const W = Number(g.dataset.w);
+    const px = ((ev.clientX - r.left) / r.width) * W;
+    let p = pts[0];
+    for (const q of pts) if (Math.abs(q.x - px) < Math.abs(p.x - px)) p = q;
+    cursor.setAttribute("x1", p.x); cursor.setAttribute("x2", p.x); cursor.setAttribute("visibility", "visible");
+    marcs.forEach((m, i) => {
+      if (p.y[i] == null) return m.setAttribute("visibility", "hidden");
+      m.setAttribute("cx", p.x); m.setAttribute("cy", p.y[i]); m.setAttribute("visibility", "visible");
+    });
+    dica.hidden = false;
+    dica.innerHTML = `<span>${esc(p.d)}</span>${SERIES_EVO.map((s, i) => `<div class="l"><i class="${s.cls}"></i>${s.nome}<strong class="num">${p.v[i] == null ? "—" : R(p.v[i])}</strong></div>`).join("")}`;
+    const esq = (p.x / W) * r.width;
+    dica.style.left = `${Math.min(Math.max(esq - 90, 0), r.width - 180)}px`;
+  };
+  const sair = () => { dica.hidden = true; cursor.setAttribute("visibility", "hidden"); marcs.forEach((m) => m.setAttribute("visibility", "hidden")); };
+  svg.addEventListener("pointermove", mover);
+  svg.addEventListener("pointerdown", mover);
+  svg.addEventListener("pointerleave", sair);
+}
+
+async function carregarEvolucao() {
+  const el = $("#cartaoEvolucao");
+  if (!el) return;
+  const periodo = estado.periodoEvo ?? "6m";
+  el.querySelectorAll("[data-acao=periodoEvo]").forEach((b) => b.classList.toggle("ativo", b.dataset.p === periodo));
+  const corpo = el.querySelector(".corpo-evo");
+  try {
+    const dd = await dadosEvolucao();
+    if (!$("#cartaoEvolucao")) return;
+    corpo.innerHTML = graficoEvolucao(baldesEvolucao(dd, periodo));
+    ativarGraficoEvolucao(corpo.querySelector(".grafico-evo"));
+  } catch (e) {
+    corpo.innerHTML = `<p class="nota-texto">Não consegui montar o gráfico (${esc(e.message)}).</p>`;
+  }
+}
+acoes.periodoEvo = (el) => { estado.periodoEvo = el.dataset.p; carregarEvolucao(); };
 async function carregarResumoSugestoes() {
   const el = $("#cartaoSugestoes");
   if (!el) return;
