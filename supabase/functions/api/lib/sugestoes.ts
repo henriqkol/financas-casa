@@ -189,11 +189,12 @@ export function gerarDiagnostico(d: DadosSugestoes) {
   // ---------- Categorias em alta
   if (dia >= 10) {
     const fracao = dia / diasNoMes;
+    const altas: Sugestao[] = [];
     for (const [nome, c] of porCategoria) {
-      if (c.media < 100) continue;
+      if (c.media < 100 || nome === "Outros") continue;
       const projecao = c.atual / fracao;
       if (projecao > c.media * 1.3 && projecao - c.media >= 100) {
-        S.push({
+        altas.push({
           id: `alta-${nome}`, tipo: "alerta", prioridade: 3, titulo: `${nome}: ritmo acima do normal este mês`,
           texto: `Até o dia ${dia} já foram ${R(c.atual)}. Nesse ritmo o mês fecha em ${R(projecao)}, ${pct(projecao / c.media - 1)} acima da média de ${R(c.media)}.`,
           economia_mensal: arred(projecao - c.media),
@@ -201,16 +202,21 @@ export function gerarDiagnostico(d: DadosSugestoes) {
         });
       }
     }
+    // Só as 3 maiores, para não virar uma lista de alarmes
+    S.push(...altas.sort((a, b) => (b.economia_mensal ?? 0) - (a.economia_mensal ?? 0)).slice(0, 3));
   }
+  const subidas: { dif: number; s: Sugestao }[] = [];
   for (const [nome, c] of porCategoria) {
+    if (nome === "Outros" || S.some((x) => x.id === `alta-${nome}`)) continue;
     if (c.anteriores >= 100 && c.ultimo > c.anteriores * 1.3 && c.ultimo - c.anteriores >= 150) {
-      S.push({
+      subidas.push({ dif: c.ultimo - c.anteriores, s: {
         id: `subiu-${nome}`, tipo: "alerta", prioridade: 4, titulo: `${nome} subiu no último mês`,
         texto: `Foram ${R(c.ultimo)} no último mês, contra ${R(c.anteriores)} em média nos dois meses anteriores (+${pct(c.ultimo / c.anteriores - 1)}). Vale ver o que mudou.`,
         acao: { rotulo: "Ver lançamentos", destino: "movimentacoes", filtro: nome },
-      });
+      } });
     }
   }
+  S.push(...subidas.sort((a, b) => b.dif - a.dif).slice(0, 2).map((x) => x.s));
 
   // ---------- Delivery e restaurantes
   const rest = porCategoria.get("Restaurante e delivery");
