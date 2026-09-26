@@ -7,7 +7,7 @@ function carregarJsQR() {
   if (!jsQRCarregado) {
     jsQRCarregado = new Promise((ok, falha) => {
       const s = document.createElement("script");
-      s.src = "https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js";
+      s.src = "vendor/jsQR.min.js"; // cópia local: funciona sem internet
       s.onload = ok;
       s.onerror = () => falha(new Error("Não consegui carregar o leitor de QR"));
       document.head.appendChild(s);

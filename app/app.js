@@ -60,9 +60,77 @@ function avisar(msg, erro = false) {
   timerAviso = setTimeout(() => (el.hidden = true), erro ? 6000 : 3500);
 }
 
+// ------------------------------------------------------------------ dados guardados no aparelho (offline)
+// Toda consulta de leitura bem-sucedida fica guardada no IndexedDB. Sem internet, o app mostra a última cópia.
+const ehErroDeRede = (msg) => !navigator.onLine || /failed to fetch|load failed|networkerror|network request failed|fetch failed/i.test(String(msg ?? ""));
+let bancoLocal = null;
+function abrirBancoLocal() {
+  if (!bancoLocal) {
+    bancoLocal = new Promise((ok, falha) => {
+      const r = indexedDB.open("financas-cache", 1);
+      r.onupgradeneeded = () => r.result.createObjectStore("consultas");
+      r.onsuccess = () => ok(r.result);
+      r.onerror = () => falha(r.error);
+    }).catch(() => null);
+  }
+  return bancoLocal;
+}
+async function guardarLocal(chave, dados) {
+  try {
+    const db = await abrirBancoLocal(); if (!db) return;
+    db.transaction("consultas", "readwrite").objectStore("consultas").put({ em: Date.now(), dados }, chave);
+  } catch { /* sem espaço ou modo privado: segue sem cópia */ }
+}
+async function lerLocal(chave) {
+  try {
+    const db = await abrirBancoLocal(); if (!db) return null;
+    return await new Promise((ok) => {
+      const r = db.transaction("consultas").objectStore("consultas").get(chave);
+      r.onsuccess = () => ok(r.result ?? null);
+      r.onerror = () => ok(null);
+    });
+  } catch { return null; }
+}
+async function apagarLocal() {
+  try { const db = await abrirBancoLocal(); if (db) db.transaction("consultas", "readwrite").objectStore("consultas").clear(); } catch { /* ok */ }
+}
+/** Mostra a faixa "sem internet" com a data da cópia mais antiga usada na tela. */
+function marcarOffline(em) {
+  estado.offlineDesde = Math.min(estado.offlineDesde ?? em, em);
+  const el = $("#offline");
+  if (!el) return;
+  const d = new Date(estado.offlineDesde);
+  el.innerHTML = `<span>Sem internet · dados salvos em ${d.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })} às ${d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}</span>`;
+  el.hidden = false;
+}
+window.addEventListener("online", () => {
+  const el = $("#offline");
+  if (el && !el.hidden) { el.hidden = true; estado.offlineDesde = null; if (sessaoOffline) location.reload(); else recarregar(); }
+});
+let sessaoOffline = false;
+
 async function q(consulta) {
+  const leitura = consulta?.method === "GET" && consulta?.url;
+  const chave = leitura ? "q:" + consulta.url.toString() : null;
+  if (!navigator.onLine) {
+    // Sem rede: nem tenta (a biblioteca repetiria a chamada várias vezes antes de desistir)
+    const c = chave ? await lerLocal(chave) : null;
+    if (c) { marcarOffline(c.em); return c.dados; }
+    throw new Error(chave ? "Sem internet e estes dados ainda não foram guardados neste aparelho" : "Sem internet: tente de novo quando a conexão voltar");
+  }
   const { data, error } = await consulta;
-  if (error) throw new Error(error.message);
+  if (error) {
+    if (ehErroDeRede(error.message)) {
+      if (chave) {
+        const c = await lerLocal(chave);
+        if (c) { marcarOffline(c.em); return c.dados; }
+        throw new Error("Sem internet e estes dados ainda não foram guardados neste aparelho");
+      }
+      throw new Error("Sem internet: tente de novo quando a conexão voltar");
+    }
+    throw new Error(error.message);
+  }
+  if (chave) guardarLocal(chave, data);
   return data;
 }
 async function todas(fabrica) {
@@ -76,7 +144,21 @@ async function todas(fabrica) {
 
 /** Chama a função do servidor. */
 async function fn(rota, corpo, metodo = "POST") {
-  const { data: { session } } = await sb.auth.getSession();
+  // Leituras do servidor (sem corpo) também ficam guardadas para uso offline
+  const chave = !corpo && ["/sugestoes", "/config"].includes(rota) ? "fn:" + rota : null;
+  if (chave && !navigator.onLine) {
+    const c = await lerLocal(chave);
+    if (c) { marcarOffline(c.em); return c.dados; }
+  }
+  const j = await fnRede(rota, corpo, metodo).catch(async (e) => {
+    if (chave && e.rede) { const c = await lerLocal(chave); if (c) { marcarOffline(c.em); return c.dados; } }
+    throw e;
+  });
+  if (chave) guardarLocal(chave, j);
+  return j;
+}
+async function fnRede(rota, corpo, metodo) {
+  const { data: { session } } = await sb.auth.getSession().catch(() => ({ data: { session: null } }));
   let r;
   try {
     r = await fetch(`${SUPABASE_URL}/functions/v1/api${rota}`, {
@@ -132,7 +214,13 @@ async function irPara(aba) {
   abas.querySelectorAll("button").forEach((b) => b.classList.toggle("ativa", b.dataset.aba === aba));
   window.scrollTo(0, 0);
   const tela = { inicio: telaInicio, gastos: telaGastos, escanear: telaEscanear, notas: telaNotas, mais: telaMais, patrimonio: telaPatrimonio, sugestoes: telaSugestoes }[aba] ?? telaInicio;
-  try { await tela(); } catch (e) { app.innerHTML = `<div class="vazio"><strong>Algo deu errado</strong>${esc(e.message)}</div>`; }
+  try { await tela(); } catch (e) {
+    const semRede = /^Sem internet/.test(e.message);
+    const alvo = $("#conteudo") ?? app;
+    alvo.innerHTML = semRede
+      ? `<div class="vazio"><strong>Sem internet</strong>Esta tela ainda não tinha sido aberta neste aparelho, então não há dados guardados. Com internet, abra-a uma vez e ela passa a funcionar offline.</div>`
+      : `<div class="vazio"><strong>Algo deu errado</strong>${esc(e.message)}</div>`;
+  }
 }
 function recarregar() { return irPara(estado.aba); }
 
@@ -459,6 +547,7 @@ async function carregarResumoSugestoes() {
   }
 }
 acoes.irSugestoes = () => irPara("sugestoes");
+acoes.tentarDeNovo = () => location.reload();
 acoes.alternarOlho = () => {
   const oculto = !document.body.classList.contains("oculto");
   aplicarOlho(oculto);
@@ -661,7 +750,32 @@ acoes.desvincular = async (el) => {
 
 // ------------------------------------------------------------------ ESCANEAR
 const FILA = "filaNotas";
-function lerFila() { try { return JSON.parse(localStorage.getItem(FILA) ?? "[]"); } catch { return []; } }
+/** Fila de notas escaneadas sem internet: [{texto, em}] (versões antigas guardavam só o texto). */
+function lerFila() {
+  try { return JSON.parse(localStorage.getItem(FILA) ?? "[]").map((x) => (typeof x === "string" ? { texto: x, em: Date.now() } : x)); }
+  catch { return []; }
+}
+/** Número da nota a partir da chave de 44 dígitos do QR (para mostrar na fila). */
+function numeroDaChave(texto) {
+  const m = String(texto).replace(/\s/g, "").match(/\d{44}/);
+  return m ? String(Number(m[0].slice(25, 34))) : null;
+}
+function guardarNaFila(texto) {
+  const fila = lerFila();
+  const chave = String(texto).replace(/\s/g, "").match(/\d{44}/)?.[0];
+  if (fila.some((x) => x.texto === texto || (chave && x.texto.replace(/\s/g, "").includes(chave)))) return false;
+  gravarFila([...fila, { texto, em: Date.now() }]);
+  return true;
+}
+function cartaoFila(fila) {
+  if (!fila.length) return "";
+  return `<div class="cartao cartao-fila"><div class="linha" style="cursor:default;border-top:0;padding-top:0"><div class="corpo">
+    <div class="titulo">${fila.length} nota(s) aguardando internet</div>
+    <div class="meta">Serão enviadas à SEFAZ assim que a conexão voltar</div></div>
+    ${navigator.onLine ? `<button class="botao peq" data-acao="enviarFila">Enviar agora</button>` : `<span class="chip alerta">offline</span>`}</div>
+    <ul class="lista">${fila.map((x) => `<li class="linha" style="cursor:default"><div class="corpo"><div class="titulo">${numeroDaChave(x.texto) ? `Nota nº ${esc(numeroDaChave(x.texto))}` : "Nota fiscal"}</div>
+      <div class="meta">escaneada ${dataHora(new Date(x.em).toISOString())}</div></div></li>`).join("")}</ul></div>`;
+}
 function gravarFila(f) { try { localStorage.setItem(FILA, JSON.stringify(f)); } catch { /* sem armazenamento */ } }
 
 async function telaEscanear() {
@@ -673,7 +787,7 @@ async function telaEscanear() {
       <button class="botao sec" id="btLanterna" data-acao="lanterna" hidden>Lanterna</button>
       <button class="botao sec" data-acao="digitarQr">Colar link ou chave</button>
     </div>
-    ${fila.length ? `<div class="cartao" style="margin-top:12px"><div class="linha" style="cursor:default"><div class="corpo"><div class="titulo">${fila.length} nota(s) guardada(s) sem internet</div><div class="meta">Serão enviadas automaticamente</div></div><button class="botao peq" data-acao="enviarFila">Enviar agora</button></div></div>` : ""}
+    <div style="margin-top:12px">${cartaoFila(fila)}</div>
     <p class="nota-texto" style="margin-top:12px">Aponte para o QR code no rodapé da nota fiscal (NFC-e). O app busca os itens na SEFAZ, categoriza e liga a nota ao gasto do banco quando ele aparecer.</p>`;
   const video = $("video", app);
   const status = $("#statusLeitor");
@@ -702,6 +816,7 @@ acoes.enviarDigitado = () => {
 };
 
 async function enviarNota(texto) {
+  if (!navigator.onLine) return guardarOffline(texto);
   app.innerHTML = `<div class="topo"><h1>Escanear nota</h1></div>
     <div class="cartao" style="text-align:center;padding:40px 16px"><div class="spinner"></div>
     <p>Consultando a nota na SEFAZ…</p><p class="nota-texto">Isso leva alguns segundos.</p></div>`;
@@ -711,14 +826,19 @@ async function enviarNota(texto) {
     telaPosLeitura(r.nota);
     abrirNota(r.nota.id, r);
   } catch (e) {
-    if (e.rede || !navigator.onLine) {
-      gravarFila([...lerFila(), texto]);
-      avisar("Sem internet: a nota foi guardada e será enviada depois");
-    } else {
-      avisar(e.message, true);
-    }
+    if (e.rede || !navigator.onLine) return guardarOffline(texto);
+    avisar(e.message, true);
     telaPosLeitura(null);
   }
+}
+function guardarOffline(texto) {
+  const nova = guardarNaFila(texto);
+  avisar(nova ? "Sem internet: nota guardada, será enviada quando a conexão voltar" : "Esta nota já está na fila");
+  app.innerHTML = `<div class="topo"><h1>Escanear nota</h1></div>
+    <div class="cartao" style="text-align:center;padding:24px 16px"><h2 style="margin:0 0 6px">Nota guardada</h2>
+    <p class="nota-texto" style="margin:0">Sem internet agora. Assim que a conexão voltar, o app consulta a SEFAZ, categoriza os itens e liga a nota ao gasto — sozinho.</p></div>
+    ${cartaoFila(lerFila())}
+    <button class="botao cheio" data-acao="escanearOutra">Escanear outra nota</button>`;
 }
 function telaPosLeitura(nota) {
   app.innerHTML = `<div class="topo"><h1>Escanear nota</h1></div>
@@ -729,19 +849,31 @@ function telaPosLeitura(nota) {
 }
 acoes.escanearOutra = () => irPara("escanear");
 
+let processandoFila = false;
 async function processarFila() {
-  const fila = lerFila();
-  if (!fila.length || !navigator.onLine) return;
-  const restantes = [];
+  if (processandoFila || !navigator.onLine || !lerFila().length) return;
+  processandoFila = true;
   let enviadas = 0;
-  for (const t of fila) {
-    try { await fn("/nfce", { texto: t }); enviadas++; } catch (e) { if (e.rede) restantes.push(t); }
-  }
-  gravarFila(restantes);
-  if (enviadas) avisar(`${enviadas} nota(s) guardada(s) foram enviadas`);
+  const falhas = [];
+  try {
+    for (const item of lerFila()) {
+      try {
+        await fn("/nfce", { texto: item.texto });
+        enviadas++;
+      } catch (e) {
+        if (e.rede) break;                 // caiu de novo: tenta depois
+        falhas.push(e.message);            // nota inválida: sai da fila e avisa
+      }
+      gravarFila(lerFila().filter((x) => x.texto !== item.texto));
+    }
+  } finally { processandoFila = false; }
+  if (enviadas) avisar(`${enviadas} nota(s) guardada(s) offline foram processadas`);
+  if (falhas.length) avisar(`${falhas.length} nota(s) da fila não puderam ser lidas: ${falhas[0]}`, true);
+  if ((enviadas || falhas.length) && ["inicio", "notas", "escanear"].includes(estado.aba) && folha.hidden) recarregar();
 }
 acoes.enviarFila = async () => { await processarFila(); recarregar(); };
 window.addEventListener("online", processarFila);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) processarFila(); });
 document.addEventListener("visibilitychange", () => { if (document.hidden && estado.aba === "escanear") pararLeitor(); });
 
 // ------------------------------------------------------------------ NOTAS
@@ -750,6 +882,7 @@ async function telaNotas() {
   app.innerHTML = `<div class="topo"><h1>Notas fiscais</h1></div>
     <div class="filtros">${[["confirmar", "Para confirmar"], ["pendente", "Aguardando gasto"], ["vinculada", "Ligadas"], ["erro", "Com erro"], ["todas", "Todas"]]
       .map(([k, n]) => `<button class="filtro ${f === k ? "ativo" : ""}" data-acao="filtroNotas" data-f="${k}">${n}<span id="cont-${k}"></span></button>`).join("")}</div>
+    ${cartaoFila(lerFila())}
     <div id="conteudo">${carregando()}</div>`;
   const todasNotas = await q(sb.from("notas")
     .select("id, nome_emitente, emissao, valor_pago, vinculo_status, consulta_status, consulta_erro, criado_em, nota_itens(count)")
@@ -1065,7 +1198,7 @@ acoes.removerMembro = async (el) => {
   if (el.dataset.confirmar !== "1") { el.dataset.confirmar = "1"; el.textContent = "Confirmar"; return; }
   try { await q(sb.from("membros").delete().eq("email", el.dataset.email)); recarregar(); } catch (e) { avisar(e.message, true); }
 };
-acoes.sair = async () => { await sb.auth.signOut(); location.hash = ""; location.reload(); };
+acoes.sair = async () => { await apagarLocal(); await sb.auth.signOut().catch(() => {}); location.hash = ""; location.reload(); };
 
 // ------------------------------------------------------------------ PATRIMÔNIO
 // Investimentos (aplicações agrupadas em caixinhas) e dívidas.
@@ -1657,14 +1790,35 @@ async function iniciar() {
   sb.auth.onAuthStateChange((evento) => {
     if (evento === "PASSWORD_RECOVERY") { recuperando = true; telaLogin("nova", "Escolha a nova senha."); }
   });
-  const { data: { session } } = await sb.auth.getSession();
+  let session = null;
+  if (navigator.onLine) {
+    const semResposta = new Promise((ok) => setTimeout(() => ok({ data: { session: null } }), 8000));
+    ({ data: { session } } = await Promise.race([sb.auth.getSession().catch(() => ({ data: { session: null } })), semResposta]));
+  }
   if (recuperando) return;
   if (session && HASH_INICIAL.includes("type=recovery")) return telaLogin("nova", "Escolha a nova senha.");
+  if (!session && !navigator.onLine) {
+    // Sem internet o login não pode ser renovado (e a biblioteca ficaria tentando): usa a sessão guardada só para abrir os dados salvos
+    try {
+      const ref = new URL(SUPABASE_URL).hostname.split(".")[0];
+      const salva = JSON.parse(localStorage.getItem(`sb-${ref}-auth-token`) ?? "null");
+      if (salva?.user?.email) { session = salva; sessaoOffline = true; }
+    } catch { /* sem sessão guardada */ }
+  }
   if (!session) return telaLogin();
   estado.email = session.user.email?.toLowerCase();
 
-  let membros = [];
-  try { membros = await q(sb.from("membros").select("email")); } catch { /* segue */ }
+  let membros = [], erroRede = false;
+  try { membros = await q(sb.from("membros").select("email")); }
+  catch (e) { erroRede = !navigator.onLine || /fetch|network|rede|timeout|internet/i.test(String(e?.message ?? e)); }
+  if (erroRede && !membros.length) {
+    // Sem internet e sem cópia guardada: não confundir com "acesso pendente": não confundir com "acesso pendente"
+    app.innerHTML = `<div class="login"><div class="cartao"><h2>Sem internet</h2>
+      <p>O app precisa de conexão para buscar os dados. Assim que a internet voltar, ele carrega sozinho.</p>
+      <button class="botao" data-acao="tentarDeNovo">Tentar de novo</button></div></div>`;
+    window.addEventListener("online", () => location.reload(), { once: true });
+    return;
+  }
   if (!membros.length) {
     app.innerHTML = `<div class="login"><div class="cartao"><h2>Acesso pendente</h2>
       <p>Você entrou como <strong>${esc(estado.email)}</strong>, mas este e-mail ainda não tem acesso aos dados.</p>

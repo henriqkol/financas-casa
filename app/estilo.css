@@ -266,3 +266,6 @@ body.oculto .priv-aviso { display: block; margin: 8px 0 0; }
 .dica-evo > span { color: var(--texto-2); display: block; margin-bottom: 2px; }
 .dica-evo .l { display: flex; align-items: center; gap: 6px; color: var(--texto-2); }
 .dica-evo .l strong { margin-left: auto; color: var(--texto); }
+
+/* Faixa de modo offline */
+#offline { background: var(--alerta-2); color: var(--alerta); font-size: 13px; font-weight: 600; text-align: center; padding: 8px 12px; padding-top: calc(8px + env(safe-area-inset-top)); }

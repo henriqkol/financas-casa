@@ -1,10 +1,11 @@
 // Service worker: permite instalar o app e abri-lo sem internet.
 // Estratégia "rede primeiro": com internet, sempre pega a versão mais nova.
-const CACHE = "financas-v2";
-const BASICO = ["./", "index.html", "estilo.css", "app.js", "scanner.js", "config.js", "manifest.webmanifest", "icons/icon-192.png"];
+const CACHE = "financas-v3";
+const BASICO = ["./", "index.html", "estilo.css", "app.js", "scanner.js", "config.js", "manifest.webmanifest", "icons/icon-192.png", "vendor/jsQR.min.js"];
+const EXTERNOS = ["https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm"];
 
 self.addEventListener("install", (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(BASICO)).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(BASICO).then(() => c.addAll(EXTERNOS).catch(() => {}))).then(() => self.skipWaiting()));
 });
 self.addEventListener("activate", (e) => {
   e.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => k !== CACHE).map((k) => caches.delete(k)))).then(() => self.clients.claim()));
