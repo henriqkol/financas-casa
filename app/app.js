@@ -235,9 +235,9 @@ async function telaInicio() {
   $("#conteudo").innerHTML = `
     <div class="cartao destaque">
       <div class="nota-texto">Gasto em ${nomeMes(estado.mes)}</div>
-      <div class="valor num">${R(total)}</div>
+      <div class="valor num">${Rp(total)}</div>
       <div class="compara">${variacao == null ? "Sem dados do mês anterior para comparar" :
-        `<span class="${variacao > 0 ? "sobe" : "desce"}">${variacao > 0 ? "▲" : "▼"} ${Math.abs(variacao * 100).toFixed(0)}%</span> em relação a ${ehMesAtual ? `${nomeMes(ant).split(" ")[0]} até o dia ${diaHoje}` : nomeMes(ant).split(" ")[0]} (${R(base)})`}</div>
+        `<span class="${variacao > 0 ? "sobe" : "desce"}">${variacao > 0 ? "▲" : "▼"} ${Math.abs(variacao * 100).toFixed(0)}%</span> em relação a ${ehMesAtual ? `${nomeMes(ant).split(" ")[0]} até o dia ${diaHoje}` : nomeMes(ant).split(" ")[0]} (${Rp(base)})`}</div>
       ${total > 0 ? `<div class="compara">${Math.round((comNota / total) * 100)}% do valor tem nota fiscal detalhada</div>` : ""}
       ${totalReceitas > 0 ? `<div class="compara">Entrou ${Rp(totalReceitas)} · ${totalReceitas - total >= 0 ? `sobrou <span class="desce">${Rp(totalReceitas - total)}</span>` : `faltou <span class="sobe">${Rp(total - totalReceitas)}</span>`}</div>` : ""}
     </div>
@@ -255,7 +255,7 @@ async function telaInicio() {
         const cor = estado.catPorId[c.id]?.cor ?? "#8a8f98";
         return `<div class="barra-cat" data-acao="verCategoria" data-id="${c.id ?? ""}">
           <div class="nome"><span class="ponto" style="background:${esc(cor)}"></span><span>${esc(c.nome)}</span></div>
-          <div class="num">${R(c.valor)}<span class="pct">${Math.round((c.valor / total) * 100)}%</span></div>
+          <div class="num">${Rp(c.valor)}<span class="pct">${Math.round((c.valor / total) * 100)}%</span></div>
           <div class="trilho"><i style="width:${(c.valor / max) * 100}%;background:${esc(cor)}"></i></div></div>`;
       }).join("") : `<div class="vazio"><strong>Nenhum gasto neste mês</strong>Sincronize o Open Finance em Mais, ou escaneie uma nota.</div>`}
     </div>
@@ -301,8 +301,8 @@ async function carregarResumoSugestoes() {
     if (!$("#cartaoSugestoes")) return;
     const top = d.sugestoes.filter((x) => x.tipo !== "dica").slice(0, 3);
     el.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">Sugestões</h3><span class="chip">ver todas ›</span></div>
-      ${d.economia_potencial > 0 ? `<div class="valor num desce" style="font-size:22px;font-weight:700;margin-top:6px">${R(d.economia_potencial)}<span class="nota-texto" style="font-weight:400"> por mês de economia possível</span></div>` : ""}
-      <ul class="lista">${top.map((x) => `<li class="linha" style="cursor:pointer"><span class="icone-sug ${x.tipo}">${ICONES_SUG[x.tipo]}</span><div class="corpo"><div class="titulo">${esc(x.titulo)}</div></div>${x.economia_mensal ? `<div class="valor num desce" style="font-size:13px">${R(x.economia_mensal)}/mês</div>` : ""}</li>`).join("")}</ul>`;
+      ${d.economia_potencial > 0 ? `<div class="valor num desce" style="font-size:22px;font-weight:700;margin-top:6px">${Rp(d.economia_potencial)}<span class="nota-texto" style="font-weight:400"> por mês de economia possível</span></div>` : ""}
+      <p class="nota-texto priv-aviso">Sugestões ocultas. Toque no olho para ver.</p><ul class="lista priv-bloco">${top.map((x) => `<li class="linha" style="cursor:pointer"><span class="icone-sug ${x.tipo}">${ICONES_SUG[x.tipo]}</span><div class="corpo"><div class="titulo">${esc(x.titulo)}</div></div>${x.economia_mensal ? `<div class="valor num desce" style="font-size:13px">${Rp(x.economia_mensal)}/mês</div>` : ""}</li>`).join("")}</ul>`;
   } catch (e) {
     el.innerHTML = `<h3>Sugestões</h3><p class="nota-texto">Não consegui analisar agora (${esc(e.message)}).</p>`;
   }
@@ -384,10 +384,10 @@ async function telaGastos() {
   $("#conteudo").innerHTML = `
     <div class="cartao resumo-mov">
       <div><span class="nota-texto">Receitas</span><strong class="num entrada">${Rp(entradas, "+")}</strong></div>
-      <div><span class="nota-texto">Despesas</span><strong class="num">−${R(saidas)}</strong></div>
+      <div><span class="nota-texto">Despesas</span><strong class="num">${Rp(saidas, "−")}</strong></div>
       <div><span class="nota-texto">Resultado</span><strong class="num ${entradas - saidas >= 0 ? "entrada" : "sobe"}">${Rp(Math.abs(entradas - saidas), entradas - saidas >= 0 ? "+" : "−")}</strong></div>
     </div>
-    <div class="nota-texto" style="margin:0 2px 4px">${txs.length} lançamento(s)${valorNaCategoria && catF !== "nula" ? ` · ${R(saidas)} em ${esc(nomeCat)}` : ""}. Movimentos entre contas, faturas e investimentos aparecem em cinza e não entram nas somas.</div>
+    <div class="nota-texto" style="margin:0 2px 4px">${txs.length} lançamento(s)${valorNaCategoria && catF !== "nula" ? ` · ${Rp(saidas)} em ${esc(nomeCat)}` : ""}. Movimentos entre contas, faturas e investimentos aparecem em cinza e não entram nas somas.</div>
     ${[...porDia.entries()].map(([dia, lista]) => {
       const e = somaTipo(lista, "receita"), sd = somaTipo(lista, "despesa");
       return `<div class="dia"><span>${dataLonga(dia)}</span><span class="num">${e ? `<span class="entrada">${Rp(e, "+")}</span>` : ""}${e && sd ? " · " : ""}${sd ? `−${R(sd)}` : ""}</span></div>
@@ -1366,22 +1366,22 @@ async function telaSugestoes() {
   $("#conteudo").innerHTML = `
     ${d.economia_potencial > 0 ? `<div class="cartao destaque">
       <div class="nota-texto">Economia possível seguindo as sugestões</div>
-      <div class="valor num desce">${R(d.economia_potencial)}<span class="nota-texto" style="font-size:15px;font-weight:400"> por mês</span></div>
-      <div class="compara">${R(d.economia_potencial * 12)} em um ano</div></div>` : ""}
+      <div class="valor num desce">${Rp(d.economia_potencial)}<span class="nota-texto" style="font-size:15px;font-weight:400"> por mês</span></div>
+      <div class="compara">${Rp(d.economia_potencial * 12)} em um ano</div></div>` : ""}
 
     <div class="cartao">
       <h3>Plano de gastos</h3>
       <p class="nota-texto" style="margin-top:0">Renda ${Rp(p.renda)} por mês (${esc(p.origem_renda || "não identificada")}). Pela regra ${Math.round(p.pct.essencial * 100)}/${Math.round(p.pct.estilo_vida * 100)}/${Math.round(p.pct.poupanca * 100)}, o <strong>gasto ideal é até ${Rp(p.gasto_ideal)}</strong>. Valores atuais: ${mesesTxt}.</p>
-      ${barraPlano("Essencial", p.essencial.atual, p.essencial.ideal, "var(--acento)")}
-      ${barraPlano("Estilo de vida", p.estilo_vida.atual, p.estilo_vida.ideal, "#e5813b")}
+      ${barraPlano("Essencial", p.essencial.atual, p.essencial.ideal, "var(--acento)", false, true)}
+      ${barraPlano("Estilo de vida", p.estilo_vida.atual, p.estilo_vida.ideal, "#e5813b", false, true)}
       ${barraPlano("Sobra para guardar/quitar", p.poupanca.atual, p.poupanca.ideal, "#3b7dd8", true, true)}
-      <p class="nota-texto">Essencial: mercado, casa, saúde, transporte, educação, juros. Estilo de vida: restaurantes, lazer, compras, assinaturas. ${p.dividas_media ? `Além das despesas, ${R(p.dividas_media)}/mês foram para pagar dívidas.` : ""}</p>
+      <p class="nota-texto">Essencial: mercado, casa, saúde, transporte, educação, juros. Estilo de vida: restaurantes, lazer, compras, assinaturas. ${p.dividas_media ? `Além das despesas, ${Rp(p.dividas_media)}/mês foram para pagar dívidas.` : ""}</p>
     </div>
 
     ${d.dividas.ordem.length ? `<div class="cartao" data-acao="irPatrimonio" data-s="dividas" style="cursor:pointer">
       <h3>Dívidas</h3>
       <div class="linha" style="cursor:inherit;border-top:0;padding-top:0"><div class="corpo"><div class="titulo num" style="font-size:20px">${Rp(d.dividas.total)}</div>
-      <div class="meta">${d.dividas.comprometimento ? `${Math.round(d.dividas.comprometimento * 100)}% da renda vai para dívidas · ` : ""}juros estimados ${R(d.dividas.ordem.reduce((s, x) => s + x.juros_mes, 0))}/mês</div></div></div>
+      <div class="meta">${d.dividas.comprometimento ? `${Math.round(d.dividas.comprometimento * 100)}% da renda vai para dívidas · ` : ""}juros estimados ${Rp(d.dividas.ordem.reduce((s, x) => s + x.juros_mes, 0))}/mês</div></div></div>
     </div>` : ""}
 
     <div class="cartao">
@@ -1392,10 +1392,10 @@ async function telaSugestoes() {
     <h3 style="margin:18px 2px 8px">O que fazer</h3>
     ${d.sugestoes.map((x) => `<div class="cartao sugestao ${x.tipo}">
       <div class="sug-topo"><span class="icone-sug ${x.tipo}">${ICONES_SUG[x.tipo]}</span><span class="chip">${NOMES_TIPO_SUG[x.tipo]}</span>
-        ${x.economia_mensal ? `<span class="chip ok" style="margin-left:auto">${R(x.economia_mensal)}/mês</span>` : ""}</div>
-      <h2 style="margin:8px 0 4px">${esc(x.titulo)}</h2>
+        ${x.economia_mensal ? `<span class="chip ok" style="margin-left:auto">${Rp(x.economia_mensal)}/mês</span>` : ""}</div>
+      <h2 style="margin:8px 0 4px">${privTexto(esc(x.titulo))}</h2>
       <p style="margin:0">${privTexto(esc(x.texto))}</p>
-      ${x.itens?.length ? `<ul class="lista" style="margin-top:6px">${x.itens.map((i) => `<li class="linha" style="cursor:default"><div class="corpo"><div class="titulo">${esc(i.rotulo)}</div>${i.detalhe ? `<div class="meta">${esc(i.detalhe)}</div>` : ""}</div><div class="valor num">${x.tipo === "divida" ? Rp(i.valor) : R(i.valor)}</div></li>`).join("")}</ul>` : ""}
+      ${x.itens?.length ? `<ul class="lista" style="margin-top:6px">${x.itens.map((i) => `<li class="linha" style="cursor:default"><div class="corpo"><div class="titulo">${privTexto(esc(i.rotulo))}</div>${i.detalhe ? `<div class="meta">${privTexto(esc(i.detalhe))}</div>` : ""}</div><div class="valor num">${Rp(i.valor)}</div></li>`).join("")}</ul>` : ""}
       ${x.acao ? `<div class="botoes"><button class="botao peq sec" data-acao="acaoSugestao" data-destino="${esc(x.acao.destino)}" data-filtro="${esc(x.acao.filtro ?? "")}">${esc(x.acao.rotulo)}</button></div>` : ""}
     </div>`).join("")}
     <p class="nota-texto">As sugestões usam os seus lançamentos dos últimos 3 meses completos e o CDI de ${String(d.referencia.cdi_anual).replace(".", ",")}% ao ano (Banco Central). São orientações gerais, não recomendação de investimento.</p>`;

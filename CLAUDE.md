@@ -28,7 +28,7 @@ App de controle financeiro doméstico do Rique (e da esposa). Tudo em português
 - Categorias têm `natureza` (despesa/receita/neutro) e `classe` (essencial/estilo_vida). Regras podem ter `sentido` (só entrada ou só saída); regras aprendidas guardam o sentido do lançamento.
 - Tela Movimentações (aba `gastos` no código) mostra despesas e receitas; itens neutros em cinza, fora das somas.
 - `lib/sugestoes.ts` (`gerarDiagnostico`) é pura e testada; `index.ts/montarSugestoes` só junta os dados. Economia total não soma alertas de ritmo nem conta duas vezes os juros do cheque especial.
-- Olho no topo das telas: oculta saldos, receitas, investimentos e dívidas (`Rp()` no app.js, classe `body.oculto`, lembrado no aparelho). Gastos e notas continuam visíveis (`R()`).
+- Olho no topo das telas: oculta saldos, receitas, investimentos e dívidas (`Rp()` no app.js, classe `body.oculto`, lembrado no aparelho). Com o olho fechado também somem: total gasto e totais por categoria no Início, textos das sugestões no cartão do Início, todos os valores da tela Sugestões e o total de despesas em Movimentações. Valores de cada gasto e das notas continuam visíveis (`R()`).
 
 ## Análises
 Ver `docs/BASE.md` para as visões e consultas prontas.
