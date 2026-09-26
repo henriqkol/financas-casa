@@ -14,6 +14,7 @@
 //   POST /sync            {}          → busca contas e lançamentos no Open Finance
 //   GET  /config  · POST /config {pluggy_client_id, pluggy_client_secret, anthropic_key}
 //   POST /itens   {id, acao: "adicionar"|"remover"} · POST /descobrir-itens
+//   POST /pagar-divida {divida_id, transacao_id? | data+valor, aprender} · POST /sync-pagamentos
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { chaveAprendizado, dataBrasilia, normalizar } from "./lib/texto.ts";
@@ -24,9 +25,10 @@ import {
 } from "./lib/categorizar.ts";
 import { candidatos, escolhaAutomatica, JANELA, type TxCandidata } from "./lib/vinculo.ts";
 import {
-  autenticar, listarContas, listarItens, listarTransacoes, normalizarTransacao, obterItem,
-  type LinhaTransacao,
+  autenticar, listarContas, listarEmprestimos, listarInvestimentos, listarItens, listarTransacoes,
+  normalizarTransacao, obterItem, type LinhaTransacao,
 } from "./lib/pluggy.ts";
+import { normalizarEmprestimo, normalizarInvestimento, reconhecerPagamentos } from "./lib/patrimonio.ts";
 import { categorizarComIA } from "./lib/ia.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
@@ -417,7 +419,7 @@ async function vincularPendentes(): Promise<number> {
 
 async function sincronizar(origem: string) {
   const log = ok(await db.from("sync_log").insert({ origem }).select("id").single()) as any;
-  const resumo = { novas: 0, atualizadas: 0, removidas: 0, vinculadas: 0, contas: 0, avisos: [] as string[] };
+  const resumo = { novas: 0, atualizadas: 0, removidas: 0, vinculadas: 0, contas: 0, investimentos: 0, emprestimos: 0, pagamentos: 0, avisos: [] as string[] };
   try {
     const cfg = await lerConfig(["pluggy_client_id", "pluggy_client_secret"]);
     if (!cfg.pluggy_client_id || !cfg.pluggy_client_secret) {
@@ -462,6 +464,17 @@ async function sincronizar(origem: string) {
           const r = await sincronizarConta(apiKey, c, rg, cats.porNome);
           resumo.novas += r.novas; resumo.atualizadas += r.atualizadas; resumo.removidas += r.removidas;
         }
+
+        try {
+          resumo.investimentos += await sincronizarInvestimentos(apiKey, it.id);
+        } catch (e) {
+          resumo.avisos.push(`Investimentos: ${e instanceof Error ? e.message : e}`);
+        }
+        try {
+          resumo.emprestimos += await sincronizarEmprestimos(apiKey, it.id);
+        } catch (e) {
+          resumo.avisos.push(`Empréstimos: ${e instanceof Error ? e.message : e}`);
+        }
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         resumo.avisos.push(`Conexão ${it.id.slice(0, 8)}…: ${msg}`);
@@ -470,9 +483,10 @@ async function sincronizar(origem: string) {
     }
 
     resumo.vinculadas = await vincularPendentes();
+    resumo.pagamentos = await reconhecerPagamentosDeDividas();
     ok(await db.from("sync_log").update({
       fim: new Date().toISOString(), ok: resumo.avisos.length === 0,
-      mensagem: resumo.avisos.join(" | ") || `${resumo.contas} contas`,
+      mensagem: resumo.avisos.join(" | ") || `${resumo.contas} contas, ${resumo.investimentos} investimentos`,
       novas: resumo.novas, atualizadas: resumo.atualizadas, removidas: resumo.removidas, vinculadas: resumo.vinculadas,
     }).eq("id", log.id));
     return resumo;
@@ -480,6 +494,71 @@ async function sincronizar(origem: string) {
     await db.from("sync_log").update({ fim: new Date().toISOString(), ok: false, mensagem: e instanceof Error ? e.message : String(e) }).eq("id", log.id);
     throw e;
   }
+}
+
+function hojeBrasilia(): string {
+  return dataBrasilia(new Date());
+}
+
+/** Atualiza as aplicações e grava a fotografia do dia (a última sincronização do dia vale). */
+async function sincronizarInvestimentos(apiKey: string, itemId: string): Promise<number> {
+  const brutos = await listarInvestimentos(apiKey, itemId);
+  if (!brutos.length) return 0;
+  const linhas = brutos.map((b) => normalizarInvestimento(b, itemId));
+  // caixinha_id e apelido não vêm da Pluggy: o upsert só mexe nas colunas enviadas.
+  for (let i = 0; i < linhas.length; i += 500) {
+    ok(await db.from("investimentos").upsert(linhas.slice(i, i + 500), { onConflict: "id" }));
+  }
+  const dia = hojeBrasilia();
+  const fotos = linhas.map((l) => ({
+    investimento_id: l.id, dia, saldo_bruto: l.saldo_bruto, saldo_liquido: l.saldo_liquido,
+    valor_aplicado: l.valor_aplicado, registrado_em: new Date().toISOString(),
+  }));
+  for (let i = 0; i < fotos.length; i += 500) {
+    ok(await db.from("investimento_saldos").upsert(fotos.slice(i, i + 500), { onConflict: "investimento_id,dia" }));
+  }
+  return linhas.length;
+}
+
+async function sincronizarEmprestimos(apiKey: string, itemId: string): Promise<number> {
+  const brutos = await listarEmprestimos(apiKey, itemId);
+  if (!brutos.length) return 0;
+  const linhas = brutos.map(normalizarEmprestimo);
+  const salvas = ok(await db.from("dividas").upsert(linhas, { onConflict: "pluggy_id" }).select("id, saldo_devedor")) as any[];
+  const dia = hojeBrasilia();
+  if (salvas.length) {
+    ok(await db.from("divida_saldos").upsert(
+      salvas.map((d) => ({ divida_id: d.id, dia, saldo_devedor: d.saldo_devedor })),
+      { onConflict: "divida_id,dia" },
+    ));
+  }
+  return linhas.length;
+}
+
+/** Liga ao cadastro de dívidas os lançamentos que batem com o "texto do extrato" de cada dívida. */
+async function reconhecerPagamentosDeDividas(): Promise<number> {
+  const dividas = ok(await db.from("dividas").select("id, padrao_pagamento, data_inicio, criado_em").eq("origem", "manual").eq("ativa", true).not("padrao_pagamento", "is", null)) as any[];
+  if (!dividas.length) return 0;
+  const desde = addDias(hojeBrasilia(), -75);
+  const txs = await todos((de, ate) => db.from("transacoes")
+    .select("id, data, valor, descricao, recebedor_nome")
+    .eq("sentido", "saida").eq("removida", false).gte("data", desde).range(de, ate)) as any[];
+  const usados = new Set((ok(await db.from("divida_pagamentos").select("transacao_id").not("transacao_id", "is", null)) as any[]).map((p) => p.transacao_id));
+  const achados = reconhecerPagamentos(dividas, txs.map((t) => ({ ...t, valor: Number(t.valor) })), usados)
+    .filter((p) => {
+      const d = dividas.find((x) => x.id === p.divida_id);
+      // Só pagamentos depois do cadastro (os anteriores já estão em "parcelas pagas antes")
+      const desdeCadastro = d?.data_inicio ?? (d?.criado_em ? dataBrasilia(d.criado_em) : null);
+      return !desdeCadastro || p.data >= desdeCadastro;
+    });
+  if (!achados.length) return 0;
+  ok(await db.from("divida_pagamentos").insert(achados));
+  const cat = (await categorias()).porNome["Pagamento de dívida"];
+  if (cat) {
+    ok(await db.from("transacoes").update({ categoria_id: cat, categoria_origem: "regra" })
+      .in("id", achados.map((a) => a.transacao_id)).or("categoria_origem.is.null,categoria_origem.not.in.(manual,nota)"));
+  }
+  return achados.length;
 }
 
 async function sincronizarConta(apiKey: string, conta: any, rg: RegraCompilada[], cat: Record<string, number>) {
@@ -681,6 +760,31 @@ Deno.serve(async (req) => {
         }
         return json({ ok: true, outros_atualizados: outros });
       }
+
+      case "/pagar-divida": {
+        // Liga um lançamento (ou valor avulso) a uma dívida; opcionalmente aprende o texto do extrato.
+        const divida = ok(await db.from("dividas").select("id, padrao_pagamento").eq("id", corpo.divida_id).single()) as any;
+        let data = corpo.data, valor = corpo.valor;
+        if (corpo.transacao_id) {
+          const tx = ok(await db.from("transacoes").select("id, data, valor, descricao, recebedor_nome").eq("id", corpo.transacao_id).single()) as any;
+          data = tx.data; valor = Number(tx.valor);
+          if (corpo.aprender && !divida.padrao_pagamento) {
+            ok(await db.from("dividas").update({ padrao_pagamento: chaveAprendizado(textoTx(tx)) }).eq("id", divida.id));
+          }
+          const cat = (await categorias()).porNome["Pagamento de dívida"];
+          if (cat) ok(await db.from("transacoes").update({ categoria_id: cat, categoria_origem: "manual" }).eq("id", tx.id));
+        }
+        if (!data || !valor) throw new HttpErro(400, "Informe data e valor do pagamento");
+        ok(await db.from("divida_pagamentos").upsert(
+          { divida_id: divida.id, data, valor, transacao_id: corpo.transacao_id ?? null, observacao: corpo.observacao ?? null },
+          { onConflict: "transacao_id" },
+        ));
+        const outros = corpo.aprender ? await reconhecerPagamentosDeDividas() : 0;
+        return json({ ok: true, outros_reconhecidos: outros });
+      }
+
+      case "/sync-pagamentos":
+        return json({ pagamentos: await reconhecerPagamentosDeDividas() });
 
       case "/recategorizar":
         return json(await recategorizar());

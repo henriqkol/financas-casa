@@ -53,6 +53,28 @@ select data, descricao, conta, valor from v_gastos
 where conta_como_gasto and not via_nota and mes = '2026-09' order by valor desc limit 20;
 ```
 
+## Patrimônio (investimentos e dívidas)
+
+| Visão / tabela | Para quê |
+|---|---|
+| `v_investimentos` | Cada aplicação hoje: caixinha, saldo líquido, valor aplicado, rendimento, vencimento, taxa (ex.: 100% CDI) |
+| `v_caixinhas_historico` | Saldo diário por caixinha (soma das aplicações). Começa na 1ª sincronização com investimentos (26/09/2026) |
+| `v_investimentos_historico` | Saldo diário do total investido |
+| `investimento_saldos` | Fotografia diária de cada aplicação (a última sincronização do dia vale) |
+| `caixinhas` | Caixinhas criadas no app (o Open Finance não informa o nome: cada depósito numa caixinha do Nubank vira um CDB separado, associado à caixinha pelo usuário) |
+| `v_dividas` | Tudo o que se deve hoje: dívidas cadastradas, empréstimos do Open Finance, fatura atual e parcelas futuras do cartão |
+| `v_cartao_parcelas_futuras` | Compras parceladas com parcelas ainda por vir |
+| `dividas`, `divida_pagamentos`, `divida_saldos` | Cadastro, pagamentos (ligados ao extrato quando possível) e histórico do saldo devedor |
+
+```sql
+-- Evolução de cada caixinha
+select dia, caixinha, saldo_liquido from v_caixinhas_historico order by dia, caixinha;
+
+-- Patrimônio líquido hoje
+select (select coalesce(sum(saldo_liquido),0) from investimentos where status <> 'TOTAL_WITHDRAWAL')
+     - (select coalesce(sum(saldo_devedor),0) from v_dividas) as patrimonio_liquido;
+```
+
 ## Outras tabelas
 
 - `regras_categoria`: regras de categorização (regex em MAIÚSCULAS sem acento, ou `exato` = aprendida no app).

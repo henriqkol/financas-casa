@@ -120,7 +120,7 @@ async function irPara(aba) {
   history.replaceState(null, "", `#${aba}`);
   abas.querySelectorAll("button").forEach((b) => b.classList.toggle("ativa", b.dataset.aba === aba));
   window.scrollTo(0, 0);
-  const tela = { inicio: telaInicio, gastos: telaGastos, escanear: telaEscanear, notas: telaNotas, mais: telaMais }[aba] ?? telaInicio;
+  const tela = { inicio: telaInicio, gastos: telaGastos, escanear: telaEscanear, notas: telaNotas, mais: telaMais, patrimonio: telaPatrimonio }[aba] ?? telaInicio;
   try { await tela(); } catch (e) { app.innerHTML = `<div class="vazio"><strong>Algo deu errado</strong>${esc(e.message)}</div>`; }
 }
 function recarregar() { return irPara(estado.aba); }
@@ -172,12 +172,16 @@ async function carregarCategorias() {
 async function telaInicio() {
   app.innerHTML = topoMes("Resumo") + `<div id="conteudo">${carregando()}</div>`;
   const ant = somarMes(estado.mes, -1);
-  const [linhas, anteriores, pend, ultimo] = await Promise.all([
+  const [linhas, anteriores, pend, ultimo, invs, divs] = await Promise.all([
     todas(() => sb.from("v_gastos").select("transacao_id, data, categoria_id, categoria, valor, conta_como_gasto, via_nota").eq("mes", estado.mes)),
     todas(() => sb.from("v_gastos").select("data, valor").eq("mes", ant).eq("conta_como_gasto", true)),
     q(sb.from("v_pendencias").select("tipo")),
     q(sb.from("sync_log").select("inicio, fim, ok, mensagem").order("inicio", { ascending: false }).limit(1)),
+    q(sb.from("investimentos").select("saldo_liquido, status")).catch(() => []),
+    q(sb.from("v_dividas").select("saldo_devedor")).catch(() => []),
   ]);
+  const investido = invs.filter((i) => i.status !== "TOTAL_WITHDRAWAL").reduce((s, i) => s + Number(i.saldo_liquido || 0), 0);
+  const devido = divs.reduce((s, d) => s + Number(d.saldo_devedor || 0), 0);
   const gastos = linhas.filter((l) => l.conta_como_gasto);
   const total = gastos.reduce((s, l) => s + Number(l.valor), 0);
   const totalAnt = anteriores.reduce((s, l) => s + Number(l.valor), 0);
@@ -224,6 +228,11 @@ async function telaInicio() {
           <div class="trilho"><i style="width:${(c.valor / max) * 100}%;background:${esc(cor)}"></i></div></div>`;
       }).join("") : `<div class="vazio"><strong>Nenhum gasto neste mês</strong>Sincronize o Open Finance em Mais, ou escaneie uma nota.</div>`}
     </div>
+    ${(invs.length || divs.length) ? `<div class="cartao">
+      <h3>Patrimônio</h3>
+      <div class="linha" data-acao="irPatrimonio" data-s="investimentos"><div class="corpo"><div class="titulo">Investimentos e caixinhas</div></div><div class="valor num entrada">${R(investido)}</div></div>
+      <div class="linha" data-acao="irPatrimonio" data-s="dividas"><div class="corpo"><div class="titulo">Dívidas</div></div><div class="valor num">${devido ? "−" : ""}${R(devido)}</div></div>
+    </div>` : ""}
     <div class="cartao plano">
       <div class="linha" style="cursor:default"><div class="corpo"><div class="titulo">Open Finance</div>
         <div class="meta">${sync ? `Atualizado ${haQuanto(sync.fim ?? sync.inicio)}${sync.ok === false ? ` · <span class="erro-texto">${esc(sync.mensagem ?? "erro")}</span>` : ""}` : "Ainda não sincronizado"}</div></div>
@@ -319,6 +328,10 @@ async function abrirTransacao(id) {
   const notasLivres = t.sentido === "saida" ? await q(sb.from("notas").select("id, nome_emitente, valor_pago, emissao")
     .in("vinculo_status", ["pendente", "confirmar"]).gte("emissao", de).lte("emissao", ate).order("emissao", { ascending: false }).limit(30)) : [];
   notasLivres.sort((a, b) => Math.abs(a.valor_pago - t.valor) - Math.abs(b.valor_pago - t.valor));
+  const [dividasAtivas, pagamentoDivida] = t.sentido === "saida" ? await Promise.all([
+    q(sb.from("dividas").select("id, nome").eq("ativa", true).eq("origem", "manual").order("nome")).catch(() => []),
+    q(sb.from("divida_pagamentos").select("id, dividas(nome)").eq("transacao_id", t.id).maybeSingle()).catch(() => null),
+  ]) : [[], null];
 
   abrirFolha(`
     <h2 style="margin-right:40px">${esc(t.descricao)}</h2>
@@ -350,6 +363,11 @@ async function abrirTransacao(id) {
           <div class="meta nota-texto">${dataHora(n.emissao)} · ${R(n.valor_pago)}</div></div>
           <button class="botao peq" data-acao="vincular" data-nota="${n.id}" data-tx="${esc(t.id)}">Ligar</button></div>`).join("")}</details>` : ""}
     </div>
+    ${pagamentoDivida ? `<div class="cartao"><h3>Dívida</h3><p class="nota-texto">Este lançamento é pagamento de <strong>${esc(pagamentoDivida.dividas?.nome)}</strong>.</p></div>`
+      : dividasAtivas.length ? `<details class="cartao"><summary class="nota-texto" style="cursor:pointer">É pagamento de dívida?</summary>
+      <label class="campo"><span>Dívida</span><select id="dvLigar"><option value="">Escolha…</option>${dividasAtivas.map((d) => `<option value="${d.id}">${esc(d.nome)}</option>`).join("")}</select></label>
+      <label class="check"><input type="checkbox" id="dvAprender" checked> Reconhecer sozinho os próximos pagamentos com esta descrição</label>
+      <button class="botao peq" data-acao="ligarDivida" data-tx="${esc(t.id)}">Registrar pagamento</button></details>` : ""}
     <div class="cartao">
       <h3>Observação</h3>
       <textarea id="obsTx" rows="2" placeholder="Ex.: presente de aniversário">${esc(t.observacao ?? "")}</textarea>
@@ -643,6 +661,9 @@ async function telaMais() {
       <button class="botao peq" data-acao="sincronizar">Sincronizar</button></div>
     </div>
 
+    <div class="cartao"><div class="linha" data-acao="irPatrimonio" data-s="investimentos"><div class="corpo"><div class="titulo">Patrimônio</div>
+      <div class="meta">Investimentos, caixinhas e dívidas</div></div><span class="chip">abrir</span></div></div>
+
     <details class="secao" ${!cfg.pluggy_configurado || !itens.length ? "open" : ""}><summary>Open Finance (Pluggy)</summary><div class="conteudo">
       <p class="nota-texto">${cfg.pluggy_configurado ? `Credenciais salvas (Client ID terminando em ${esc(cfg.pluggy_client_id_fim)}).` : "Cole as credenciais da sua aplicação no dashboard.pluggy.ai (aba Aplicação)."}</p>
       <label class="campo"><span>Client ID</span><input type="text" id="pgId" autocomplete="off" placeholder="${cfg.pluggy_configurado ? "(salvo — preencha só para trocar)" : ""}"></label>
@@ -797,6 +818,422 @@ acoes.removerMembro = async (el) => {
 };
 acoes.sair = async () => { await sb.auth.signOut(); location.hash = ""; location.reload(); };
 
+// ------------------------------------------------------------------ PATRIMÔNIO
+// Investimentos (aplicações agrupadas em caixinhas) e dívidas.
+const TIPOS_DIVIDA = { emprestimo: "Empréstimo", financiamento: "Financiamento", cartao: "Cartão", cheque_especial: "Cheque especial", pessoa: "Pessoa", outro: "Outro" };
+const CORES_CAIXINHA = ["#2e9e5b", "#3b7dd8", "#e5813b", "#8e6fd8", "#d64545", "#37a3a3", "#c96f9d", "#9a7b4f"];
+
+function variacaoTexto(v, base) {
+  if (v == null || Math.abs(v) < 0.005) return `<span class="nota-texto">sem variação</span>`;
+  const pct = base > 0 ? ` (${v > 0 ? "+" : ""}${((v / base) * 100).toFixed(2).replace(".", ",")}%)` : "";
+  return `<span class="${v > 0 ? "desce" : "sobe"}">${v > 0 ? "+" : "−"}${R(Math.abs(v))}${pct}</span>`;
+}
+
+/** Gráfico de linha simples (uma série) com dica ao tocar/passar o dedo. */
+function graficoLinha(pontos, rotulo) {
+  if (pontos.length < 2) return "";
+  const W = 600, H = 180, pe = 44, pd = 12, pt = 12, pb = 26;
+  const vals = pontos.map((p) => p.v);
+  let min = Math.min(...vals), max = Math.max(...vals);
+  if (max - min < 0.01) { min -= 1; max += 1; }
+  const folga = (max - min) * 0.1; min -= folga; max += folga;
+  const x = (i) => pe + (i * (W - pe - pd)) / (pontos.length - 1);
+  const y = (v) => pt + (1 - (v - min) / (max - min)) * (H - pt - pb);
+  const d = pontos.map((p, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(p.v).toFixed(1)}`).join(" ");
+  const ticks = [min + folga, (min + max) / 2, max - folga];
+  const casas = max - min < 30 ? 2 : 0;
+  const fmtCurto = (v) => v.toLocaleString("pt-BR", { minimumFractionDigits: casas, maximumFractionDigits: casas });
+  const dados = esc(JSON.stringify(pontos.map((p, i) => ({ x: x(i), y: y(p.v), d: p.d, v: p.v }))));
+  return `<div class="grafico" data-pontos="${dados}" data-rotulo="${esc(rotulo)}">
+    <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(rotulo)}: de ${R(vals[0])} em ${dataCurta(pontos[0].d)} para ${R(vals.at(-1))} em ${dataCurta(pontos.at(-1).d)}">
+      ${ticks.map((t) => `<line x1="${pe}" x2="${W - pd}" y1="${y(t)}" y2="${y(t)}" class="grade"/><text x="${pe - 6}" y="${y(t) + 4}" text-anchor="end" class="eixo">${fmtCurto(t)}</text>`).join("")}
+      <text x="${pe}" y="${H - 6}" class="eixo">${dataCurta(pontos[0].d).slice(0, 5)}</text>
+      <text x="${W - pd}" y="${H - 6}" text-anchor="end" class="eixo">${dataCurta(pontos.at(-1).d).slice(0, 5)}</text>
+      <path d="${d}" class="linha-serie"/>
+      <line class="cursor" y1="${pt}" y2="${H - pb}" x1="0" x2="0" visibility="hidden"/>
+      <circle class="marcador" r="5" visibility="hidden"/>
+      <rect x="${pe}" y="0" width="${W - pe - pd}" height="${H}" fill="transparent" class="alvo"/>
+    </svg>
+    <div class="dica" hidden></div></div>`;
+}
+function ativarGraficos(raiz = document) {
+  raiz.querySelectorAll(".grafico").forEach((g) => {
+    const pts = JSON.parse(g.dataset.pontos);
+    const svg = g.querySelector("svg"), dica = g.querySelector(".dica");
+    const cursor = svg.querySelector(".cursor"), marc = svg.querySelector(".marcador");
+    const mover = (ev) => {
+      const r = svg.getBoundingClientRect();
+      const px = ((ev.clientX - r.left) / r.width) * 600;
+      let melhor = pts[0];
+      for (const p of pts) if (Math.abs(p.x - px) < Math.abs(melhor.x - px)) melhor = p;
+      cursor.setAttribute("x1", melhor.x); cursor.setAttribute("x2", melhor.x); cursor.setAttribute("visibility", "visible");
+      marc.setAttribute("cx", melhor.x); marc.setAttribute("cy", melhor.y); marc.setAttribute("visibility", "visible");
+      dica.hidden = false;
+      dica.innerHTML = `<strong class="num">${R(melhor.v)}</strong><span>${dataCurta(melhor.d)}</span>`;
+      const esquerda = (melhor.x / 600) * r.width;
+      dica.style.left = `${Math.min(Math.max(esquerda - 60, 0), r.width - 120)}px`;
+    };
+    const sair = () => { dica.hidden = true; cursor.setAttribute("visibility", "hidden"); marc.setAttribute("visibility", "hidden"); };
+    svg.addEventListener("pointermove", mover);
+    svg.addEventListener("pointerdown", mover);
+    svg.addEventListener("pointerleave", sair);
+  });
+}
+
+async function telaPatrimonio() {
+  const sub = estado.abaPatrimonio ?? "investimentos";
+  app.innerHTML = `<div class="topo"><h1>Patrimônio</h1></div>
+    <div class="seg"><button class="${sub === "investimentos" ? "ativo" : ""}" data-acao="abaPatrimonio" data-s="investimentos">Investimentos</button>
+    <button class="${sub === "dividas" ? "ativo" : ""}" data-acao="abaPatrimonio" data-s="dividas">Dívidas</button></div>
+    <div id="conteudo">${carregando()}</div>`;
+  if (sub === "dividas") return telaDividas();
+  return telaInvestimentos();
+}
+acoes.abaPatrimonio = (el) => { estado.abaPatrimonio = el.dataset.s; recarregar(); };
+acoes.irPatrimonio = (el) => { estado.abaPatrimonio = el.dataset.s || "investimentos"; irPara("patrimonio"); };
+
+// ---------- Investimentos
+async function telaInvestimentos() {
+  const [invs, caixinhas, hist, histCx] = await Promise.all([
+    q(sb.from("v_investimentos").select("*").order("data_aplicacao", { ascending: false })),
+    q(sb.from("caixinhas").select("*").order("ordem").order("nome")),
+    q(sb.from("v_investimentos_historico").select("*").order("dia")),
+    q(sb.from("v_caixinhas_historico").select("*").order("dia")),
+  ]);
+  const ativos = invs.filter((i) => i.status !== "TOTAL_WITHDRAWAL" && Number(i.saldo_liquido) > 0);
+  const resgatados = invs.filter((i) => !ativos.includes(i));
+  const total = ativos.reduce((s, i) => s + Number(i.saldo_liquido || 0), 0);
+  const aplicado = ativos.reduce((s, i) => s + Number(i.valor_aplicado || 0), 0);
+  const primeiro = hist[0], ultimo = hist.at(-1);
+  const semCaixinha = ativos.filter((i) => !i.caixinha_id);
+
+  // Saldo e variação por caixinha (desde a primeira fotografia de cada uma)
+  const grupos = caixinhas.map((c) => ({ ...c, itens: ativos.filter((i) => i.caixinha_id === c.id) }));
+  if (semCaixinha.length) grupos.push({ id: null, nome: "Sem caixinha", cor: "#8a8f98", itens: semCaixinha });
+  for (const g of grupos) {
+    g.saldo = g.itens.reduce((s, i) => s + Number(i.saldo_liquido || 0), 0);
+    const h = histCx.filter((x) => (x.caixinha_id ?? null) === g.id);
+    g.inicio = h[0] ? Number(h[0].saldo_liquido) : null;
+    g.inicioDia = h[0]?.dia;
+  }
+
+  $("#conteudo").innerHTML = `
+    <div class="cartao destaque">
+      <div class="nota-texto">Investido hoje (líquido de impostos)</div>
+      <div class="valor num">${R(total)}</div>
+      <div class="compara">Aplicado ${R(aplicado)} · rendimento ${variacaoTexto(total - aplicado, aplicado)}</div>
+      ${primeiro ? `<div class="compara">Desde ${dataCurta(primeiro.dia)} (primeiro registro): ${variacaoTexto(Number(ultimo.saldo_liquido) - Number(primeiro.saldo_liquido), Number(primeiro.saldo_liquido))}</div>` : ""}
+    </div>
+    <div class="cartao">
+      <h3>Evolução</h3>
+      ${hist.length >= 2 ? graficoLinha(hist.map((h) => ({ d: h.dia, v: Number(h.saldo_liquido) })), "Total investido")
+        : `<p class="nota-texto">${hist.length ? `O histórico começou em ${dataCurta(hist[0].dia)}. ` : ""}Cada sincronização guarda uma fotografia do saldo; o gráfico aparece a partir do segundo dia.</p>`}
+    </div>
+    ${semCaixinha.length ? `<div class="cartao"><div class="linha" data-acao="abrirCaixinha" data-id=""><div class="corpo">
+      <div class="titulo">${semCaixinha.length} aplicaç${semCaixinha.length > 1 ? "ões" : "ão"} sem caixinha</div>
+      <div class="meta">O Open Finance não informa o nome da caixinha. Toque para dizer onde cada uma está.</div></div><span class="chip alerta">organizar</span></div></div>` : ""}
+    <div class="cartao">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><h3 style="margin:0">Caixinhas</h3>
+      <button class="botao peq sec" data-acao="novaCaixinha">+ Nova</button></div>
+      ${grupos.length ? `<ul class="lista">${grupos.map((g) => `
+        <li class="linha" data-acao="abrirCaixinha" data-id="${g.id ?? ""}">
+          <span class="ponto" style="background:${esc(g.cor)}"></span>
+          <div class="corpo"><div class="titulo">${esc(g.nome)}</div>
+          <div class="meta">${g.itens.length} aplicaç${g.itens.length === 1 ? "ão" : "ões"}${g.inicio != null ? ` · desde ${dataCurta(g.inicioDia).slice(0, 5)}: ${variacaoTexto(g.saldo - g.inicio, g.inicio)}` : ""}</div>
+          ${g.meta ? `<div class="trilho" style="height:6px;background:var(--superficie-2);border-radius:3px;margin-top:6px;overflow:hidden"><i style="display:block;height:100%;width:${Math.min(100, (g.saldo / g.meta) * 100)}%;background:${esc(g.cor)}"></i></div>
+            <div class="meta">${Math.round((g.saldo / g.meta) * 100)}% da meta de ${R(g.meta)}</div>` : ""}</div>
+          <div class="valor num">${R(g.saldo)}</div></li>`).join("")}</ul>`
+        : `<p class="nota-texto">Crie as suas caixinhas (ex.: Reserva, Viagem) e associe as aplicações.</p>`}
+    </div>
+    ${resgatados.length ? `<details class="secao"><summary>Resgatadas ou zeradas (${resgatados.length})</summary><div class="conteudo"><ul class="lista">
+      ${resgatados.map((i) => linhaAplicacao(i)).join("")}</ul></div></details>` : ""}
+    ${!invs.length ? `<div class="vazio"><strong>Nenhum investimento ainda</strong>Os investimentos chegam na próxima sincronização do Open Finance.</div>` : ""}`;
+  ativarGraficos($("#conteudo"));
+}
+
+function linhaAplicacao(i) {
+  return `<li class="linha" data-acao="abrirAplicacao" data-id="${esc(i.id)}"><div class="corpo">
+    <div class="titulo">${esc(i.nome)}</div>
+    <div class="meta">aplicado em ${dataCurta(i.data_aplicacao)}${i.vencimento ? ` · vence ${dataCurta(i.vencimento)}` : ""}${i.status === "TOTAL_WITHDRAWAL" ? " · resgatada" : ""}</div></div>
+    <div class="valor num">${R(i.saldo_liquido)}</div></li>`;
+}
+
+acoes.abrirCaixinha = async (el) => {
+  const id = el.dataset.id ? Number(el.dataset.id) : null;
+  abrirFolha(carregando());
+  const [invs, caixinhas] = await Promise.all([
+    q(sb.from("v_investimentos").select("*").neq("status", "TOTAL_WITHDRAWAL").order("data_aplicacao", { ascending: false })),
+    q(sb.from("caixinhas").select("*").order("ordem").order("nome")),
+  ]);
+  const cx = caixinhas.find((c) => c.id === id);
+  const lista = invs.filter((i) => (i.caixinha_id ?? null) === id);
+  const opcoes = (atual) => `<option value="">Sem caixinha</option>${caixinhas.map((c) => `<option value="${c.id}" ${c.id === atual ? "selected" : ""}>${esc(c.nome)}</option>`).join("")}`;
+  abrirFolha(`
+    <h2 style="margin-right:40px">${esc(cx?.nome ?? "Sem caixinha")}</h2>
+    <div class="destaque" style="margin:8px 0"><div class="valor num">${R(lista.reduce((s, i) => s + Number(i.saldo_liquido || 0), 0))}</div></div>
+    ${!caixinhas.length ? `<p class="nota-texto">Crie uma caixinha primeiro para poder associar as aplicações.</p>` : ""}
+    <div class="cartao"><h3>Aplicações</h3>
+      ${lista.length ? lista.map((i) => `<div class="item-nota">
+        <div class="l1"><span data-acao="abrirAplicacao" data-id="${esc(i.id)}" style="cursor:pointer">${esc(i.nome)}</span><span class="num">${R(i.saldo_liquido)}</span></div>
+        <div class="l2"><span>aplicado ${dataCurta(i.data_aplicacao)} · ${R(i.valor_aplicado)}</span>
+        ${caixinhas.length ? `<select data-muda="caixinhaAplicacao" data-id="${esc(i.id)}" aria-label="Caixinha">${opcoes(i.caixinha_id)}</select>` : ""}</div></div>`).join("")
+        : `<p class="nota-texto">Nenhuma aplicação ativa aqui.</p>`}
+    </div>
+    ${cx ? `<div class="cartao"><h3>Editar caixinha</h3>
+      <label class="campo"><span>Nome</span><input type="text" id="cxNome" value="${esc(cx.nome)}"></label>
+      <div style="display:flex;gap:8px;align-items:flex-end">
+        <label class="campo" style="flex:1"><span>Meta (opcional)</span><input type="text" inputmode="decimal" id="cxMeta" value="${cx.meta ?? ""}" placeholder="Ex.: 10000"></label>
+        <label class="campo" style="flex:0 0 52px"><span>Cor</span><input type="color" id="cxCor" value="${esc(cx.cor)}" style="height:44px;width:52px;padding:2px;border-radius:10px;border:1px solid var(--borda)"></label>
+      </div>
+      <div class="botoes" style="margin-top:0"><button class="botao peq" data-acao="salvarCaixinha" data-id="${cx.id}">Salvar</button>
+      <button class="botao peq perigo" data-acao="apagarCaixinha" data-id="${cx.id}">Apagar caixinha</button></div></div>` : ""}`);
+};
+mudancas.caixinhaAplicacao = async (el) => {
+  try {
+    await q(sb.from("investimentos").update({ caixinha_id: el.value ? Number(el.value) : null }).eq("id", el.dataset.id));
+    avisar("Aplicação movida");
+    el.closest(".item-nota").remove();
+    if (estado.aba === "patrimonio") telaPatrimonio();
+  } catch (e) { avisar(e.message, true); }
+};
+acoes.novaCaixinha = () => {
+  abrirFolha(`<h2>Nova caixinha</h2>
+    <label class="campo"><span>Nome</span><input type="text" id="cxNome" placeholder="Ex.: Reserva de emergência"></label>
+    <label class="campo"><span>Meta (opcional)</span><input type="text" inputmode="decimal" id="cxMeta" placeholder="Ex.: 10000"></label>
+    <div class="botoes"><button class="botao cheio" data-acao="salvarCaixinha">Criar</button></div>`);
+  setTimeout(() => $("#cxNome")?.focus(), 50);
+};
+function numeroDigitado(s) {
+  const t = String(s ?? "").trim().replace(/[^\d,.-]/g, "");
+  if (!t) return null;
+  const n = Number(t.includes(",") ? t.replace(/\./g, "").replace(",", ".") : t);
+  return Number.isFinite(n) ? n : null;
+}
+acoes.salvarCaixinha = async (el) => {
+  const nome = $("#cxNome").value.trim();
+  if (!nome) return avisar("Dê um nome à caixinha", true);
+  const dados = { nome, meta: numeroDigitado($("#cxMeta").value) };
+  if ($("#cxCor")) dados.cor = $("#cxCor").value;
+  try {
+    if (el.dataset.id) await q(sb.from("caixinhas").update(dados).eq("id", Number(el.dataset.id)));
+    else {
+      const n = (await q(sb.from("caixinhas").select("id"))).length;
+      await q(sb.from("caixinhas").insert({ ...dados, cor: CORES_CAIXINHA[n % CORES_CAIXINHA.length] }));
+    }
+    avisar("Caixinha salva");
+    fecharFolha();
+    recarregar();
+  } catch (e) { avisar(e.message.includes("duplicate") ? "Já existe uma caixinha com esse nome" : e.message, true); }
+};
+acoes.apagarCaixinha = async (el) => {
+  if (el.dataset.confirmar !== "1") { el.dataset.confirmar = "1"; el.textContent = "Toque de novo: as aplicações voltam para Sem caixinha"; return; }
+  try { await q(sb.from("caixinhas").delete().eq("id", Number(el.dataset.id))); fecharFolha(); recarregar(); }
+  catch (e) { avisar(e.message, true); }
+};
+
+acoes.abrirAplicacao = async (el) => {
+  abrirFolha(carregando());
+  const [i, fotos, caixinhas] = await Promise.all([
+    q(sb.from("v_investimentos").select("*").eq("id", el.dataset.id).single()),
+    q(sb.from("investimento_saldos").select("dia, saldo_liquido, saldo_bruto").eq("investimento_id", el.dataset.id).order("dia")),
+    q(sb.from("caixinhas").select("id, nome").order("nome")),
+  ]);
+  const inv = await q(sb.from("investimentos").select("apelido, emissor").eq("id", el.dataset.id).single());
+  abrirFolha(`
+    <h2 style="margin-right:40px">${esc(i.nome)}</h2>
+    <div class="nota-texto">${esc(inv.emissor ?? "")}</div>
+    <div class="destaque" style="margin:8px 0"><div class="valor num">${R(i.saldo_liquido)}</div>
+      <div class="compara">Aplicado ${R(i.valor_aplicado)} · rendimento ${variacaoTexto(Number(i.rendimento_liquido), Number(i.valor_aplicado))}</div></div>
+    <dl class="kv">
+      <dt>Aplicado em</dt><dd>${dataCurta(i.data_aplicacao)}</dd>
+      <dt>Vencimento</dt><dd>${dataCurta(i.vencimento)}</dd>
+      <dt>Rentabilidade</dt><dd>${i.taxa != null ? `${String(Number(i.taxa)).replace(".", ",")}% ` : ""}${esc(i.indexador ?? "")}</dd>
+      <dt>Saldo bruto</dt><dd>${R(i.saldo_bruto)}</dd>
+      <dt>Resgatável</dt><dd>${R(i.saldo_resgatavel)}</dd>
+      <dt>Situação</dt><dd>${i.status === "ACTIVE" ? "Ativa" : i.status === "TOTAL_WITHDRAWAL" ? "Resgatada" : esc(i.status ?? "")}</dd>
+    </dl>
+    <div class="cartao" style="margin-top:12px">
+      <label class="campo"><span>Caixinha</span><select id="apCx"><option value="">Sem caixinha</option>${caixinhas.map((c) => `<option value="${c.id}" ${c.id === i.caixinha_id ? "selected" : ""}>${esc(c.nome)}</option>`).join("")}</select></label>
+      <label class="campo"><span>Apelido (opcional)</span><input type="text" id="apApelido" value="${esc(inv.apelido ?? "")}" placeholder="Ex.: Depósito do 13º"></label>
+      <button class="botao peq" data-acao="salvarAplicacao" data-id="${esc(el.dataset.id)}">Salvar</button>
+    </div>
+    <div class="cartao"><h3>Histórico</h3>
+      ${fotos.length >= 2 ? graficoLinha(fotos.map((f) => ({ d: f.dia, v: Number(f.saldo_liquido) })), "Saldo da aplicação") : ""}
+      <ul class="lista">${fotos.slice().reverse().slice(0, 30).map((f) => `<li class="linha" style="cursor:default"><div class="corpo">${dataCurta(f.dia)}</div><div class="valor num">${R(f.saldo_liquido)}</div></li>`).join("") || "<li class='nota-texto'>Sem registros ainda.</li>"}</ul>
+    </div>`);
+  ativarGraficos(folha);
+};
+acoes.salvarAplicacao = async (el) => {
+  try {
+    await q(sb.from("investimentos").update({
+      caixinha_id: $("#apCx").value ? Number($("#apCx").value) : null,
+      apelido: $("#apApelido").value.trim() || null,
+    }).eq("id", el.dataset.id));
+    avisar("Aplicação salva");
+    fecharFolha();
+    recarregar();
+  } catch (e) { avisar(e.message, true); }
+};
+
+// ---------- Dívidas
+async function telaDividas() {
+  const [itens, parcelas] = await Promise.all([
+    q(sb.from("v_dividas").select("*").order("saldo_devedor", { ascending: false })),
+    q(sb.from("v_cartao_parcelas_futuras").select("*").order("valor_restante", { ascending: false })),
+  ]);
+  const total = itens.reduce((s, d) => s + Number(d.saldo_devedor || 0), 0);
+  const mensal = itens.filter((d) => d.fonte === "divida").reduce((s, d) => s + Number(d.parcela_valor || 0), 0);
+  $("#conteudo").innerHTML = `
+    <div class="cartao destaque">
+      <div class="nota-texto">Total devido hoje</div>
+      <div class="valor num">${R(total)}</div>
+      ${mensal ? `<div class="compara">Parcelas de empréstimos e dívidas: ${R(mensal)} por mês</div>` : ""}
+    </div>
+    <div class="cartao">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><h3 style="margin:0">Dívidas</h3>
+      <button class="botao peq sec" data-acao="novaDivida">+ Cadastrar</button></div>
+      ${itens.length ? `<ul class="lista">${itens.map((d) => {
+        const progresso = d.parcelas_total ? Math.min(100, (Number(d.parcelas_pagas || 0) / d.parcelas_total) * 100) : null;
+        const acao = d.fonte === "divida" ? `data-acao="abrirDivida" data-id="${d.id}"` : d.fonte === "parcelas" ? `data-acao="verParcelasFuturas"` : "";
+        return `<li class="linha" ${acao} style="${acao ? "" : "cursor:default"}"><div class="corpo">
+          <div class="titulo">${esc(d.nome)}</div>
+          <div class="meta">${esc(TIPOS_DIVIDA[d.tipo] ?? d.tipo)}${d.credor ? ` · ${esc(d.credor)}` : ""}${d.origem === "open_finance" ? " · Open Finance" : ""}${d.parcela_valor ? ` · ${R(d.parcela_valor)}/mês` : ""}${d.parcelas_total ? ` · ${d.parcelas_pagas}/${d.parcelas_total} pagas` : ""}</div>
+          ${progresso != null ? `<div style="height:6px;background:var(--superficie-2);border-radius:3px;margin-top:6px;overflow:hidden"><i style="display:block;height:100%;width:${progresso}%;background:var(--acento)"></i></div>` : ""}</div>
+          <div class="valor num">${R(d.saldo_devedor)}</div></li>`;
+      }).join("")}</ul>`
+        : `<p class="nota-texto">Nenhuma dívida. Empréstimos do Open Finance e a fatura do cartão aparecem aqui sozinhos; o resto você cadastra.</p>`}
+    </div>
+    ${parcelas.length ? `<details class="secao" id="parcelasFuturas"><summary>Compras parceladas em aberto (${parcelas.length})</summary><div class="conteudo"><ul class="lista">
+      ${parcelas.map((p) => `<li class="linha" style="cursor:default"><div class="corpo"><div class="titulo">${esc(p.descricao)}</div>
+        <div class="meta">${p.parcelas_restantes} de ${p.parcelas_total} restantes · ${R(p.valor_parcela)} cada</div></div>
+        <div class="valor num">${R(p.valor_restante)}</div></li>`).join("")}</ul></div></details>` : ""}`;
+}
+acoes.verParcelasFuturas = () => { const d = $("#parcelasFuturas"); if (d) { d.open = true; d.scrollIntoView({ behavior: "smooth" }); } };
+
+function formularioDivida(d = {}) {
+  return `
+    <label class="campo"><span>Nome</span><input type="text" id="dvNome" value="${esc(d.nome ?? "")}" placeholder="Ex.: Financiamento do carro"></label>
+    <div style="display:flex;gap:8px">
+      <label class="campo" style="flex:1"><span>Tipo</span><select id="dvTipo">${Object.entries(TIPOS_DIVIDA).map(([k, n]) => `<option value="${k}" ${d.tipo === k ? "selected" : ""}>${n}</option>`).join("")}</select></label>
+      <label class="campo" style="flex:1"><span>Credor</span><input type="text" id="dvCredor" value="${esc(d.credor ?? "")}" placeholder="Banco ou pessoa"></label>
+    </div>
+    <p class="nota-texto">Preencha o que souber. Com parcela e nº de parcelas, o saldo é calculado sozinho a cada pagamento.</p>
+    <div style="display:flex;gap:8px">
+      <label class="campo" style="flex:1"><span>Valor da parcela</span><input type="text" inputmode="decimal" id="dvParcela" value="${d.parcela_valor ?? ""}"></label>
+      <label class="campo" style="flex:1"><span>Nº de parcelas</span><input type="text" inputmode="numeric" id="dvTotal" value="${d.parcelas_total ?? ""}"></label>
+    </div>
+    <div style="display:flex;gap:8px">
+      <label class="campo" style="flex:1"><span>Já pagas antes</span><input type="text" inputmode="numeric" id="dvAntes" value="${d.parcelas_pagas_antes ?? ""}" placeholder="0"></label>
+      <label class="campo" style="flex:1"><span>Juros % ao mês</span><input type="text" inputmode="decimal" id="dvJuros" value="${d.taxa_juros_mensal ?? ""}" placeholder="Ex.: 1,99"></label>
+    </div>
+    <div style="display:flex;gap:8px">
+      <label class="campo" style="flex:1"><span>Valor total (sem parcelas)</span><input type="text" inputmode="decimal" id="dvOriginal" value="${d.valor_original ?? ""}" placeholder="Ex.: dívida com pessoa"></label>
+      <label class="campo" style="flex:1"><span>Dia do vencimento</span><input type="text" inputmode="numeric" id="dvDia" value="${d.dia_vencimento ?? ""}"></label>
+    </div>
+    <label class="campo"><span>Texto no extrato (para reconhecer os pagamentos)</span><input type="text" id="dvPadrao" value="${esc(d.padrao_pagamento ?? "")}" placeholder="Ex.: PIX TRANSF JOAO ou EMPRESTIMO PESSOAL"></label>
+    <label class="campo"><span>Observação</span><input type="text" id="dvObs" value="${esc(d.observacao ?? "")}"></label>`;
+}
+function lerFormularioDivida() {
+  const int = (v) => { const n = parseInt(String(v).replace(/\D/g, ""), 10); return Number.isFinite(n) ? n : null; };
+  const padrao = normalizar($("#dvPadrao").value).replace(/[^A-Z ]+/g, " ").replace(/\s+/g, " ").trim();
+  return {
+    nome: $("#dvNome").value.trim(),
+    tipo: $("#dvTipo").value,
+    credor: $("#dvCredor").value.trim() || null,
+    parcela_valor: numeroDigitado($("#dvParcela").value),
+    parcelas_total: int($("#dvTotal").value),
+    parcelas_pagas_antes: int($("#dvAntes").value) ?? 0,
+    taxa_juros_mensal: numeroDigitado($("#dvJuros").value),
+    valor_original: numeroDigitado($("#dvOriginal").value),
+    dia_vencimento: int($("#dvDia").value),
+    padrao_pagamento: padrao || null,
+    observacao: $("#dvObs").value.trim() || null,
+  };
+}
+acoes.novaDivida = () => {
+  abrirFolha(`<h2>Cadastrar dívida</h2>${formularioDivida()}<div class="botoes"><button class="botao cheio" data-acao="salvarDivida">Salvar</button></div>`);
+};
+acoes.salvarDivida = async (el) => {
+  const dados = lerFormularioDivida();
+  if (!dados.nome) return avisar("Dê um nome à dívida", true);
+  if (!dados.parcela_valor && !dados.valor_original) return avisar("Informe o valor da parcela ou o valor total", true);
+  el.disabled = true;
+  try {
+    if (el.dataset.id) await q(sb.from("dividas").update({ ...dados, atualizado_em: new Date().toISOString() }).eq("id", Number(el.dataset.id)));
+    else await q(sb.from("dividas").insert({ ...dados, origem: "manual" }));
+    if (dados.padrao_pagamento) await fn("/sync-pagamentos").catch(() => {});
+    avisar("Dívida salva");
+    fecharFolha();
+    recarregar();
+  } catch (e) { avisar(e.message, true); el.disabled = false; }
+};
+acoes.abrirDivida = async (el) => {
+  abrirFolha(carregando());
+  const id = Number(el.dataset.id);
+  const [d, pags, saldos] = await Promise.all([
+    q(sb.from("dividas").select("*").eq("id", id).single()),
+    q(sb.from("divida_pagamentos").select("*, transacoes(descricao)").eq("divida_id", id).order("data", { ascending: false })),
+    q(sb.from("divida_saldos").select("dia, saldo_devedor").eq("divida_id", id).order("dia")),
+  ]);
+  const manual = d.origem === "manual";
+  abrirFolha(`
+    <h2 style="margin-right:40px">${esc(d.nome)}</h2>
+    <div class="nota-texto">${esc(TIPOS_DIVIDA[d.tipo] ?? d.tipo)}${d.credor ? ` · ${esc(d.credor)}` : ""}${manual ? "" : " · Open Finance"}</div>
+    <div class="destaque" style="margin:8px 0"><div class="valor num">${R(d.saldo_devedor)}</div>
+      <div class="compara">${d.parcelas_total ? `${d.parcelas_pagas} de ${d.parcelas_total} parcelas pagas` : ""}${d.parcela_valor ? ` · ${R(d.parcela_valor)}/mês` : ""}${d.dia_vencimento ? ` · vence dia ${d.dia_vencimento}` : ""}</div></div>
+    ${saldos.length >= 2 ? `<div class="cartao"><h3>Evolução do saldo</h3>${graficoLinha(saldos.map((s) => ({ d: s.dia, v: Number(s.saldo_devedor) })), "Saldo devedor")}</div>` : ""}
+    ${manual ? `<div class="cartao"><h3>Registrar pagamento</h3>
+      <div style="display:flex;gap:8px">
+        <label class="campo" style="flex:1"><span>Data</span><input type="date" id="pgData" value="${new Date().toISOString().slice(0, 10)}"></label>
+        <label class="campo" style="flex:1"><span>Valor</span><input type="text" inputmode="decimal" id="pgValor" value="${d.parcela_valor ?? ""}"></label>
+      </div>
+      <button class="botao peq" data-acao="registrarPagamento" data-id="${d.id}">Registrar</button>
+      <p class="nota-texto">${d.padrao_pagamento ? `Pagamentos com "${esc(d.padrao_pagamento)}" no extrato são registrados sozinhos.` : "Dica: abra o lançamento do pagamento em Gastos e toque em \"É pagamento de dívida\" para o app aprender a reconhecer os próximos."}</p></div>` : ""}
+    <div class="cartao"><h3>Pagamentos (${pags.length})</h3>
+      <ul class="lista">${pags.map((p) => `<li class="linha" style="cursor:default"><div class="corpo"><div class="titulo">${dataCurta(p.data)}</div>
+        <div class="meta">${esc(p.transacoes?.descricao ?? p.observacao ?? "registrado no app")}</div></div>
+        <div class="valor num">${R(p.valor)}</div>
+        ${manual ? `<button class="botao peq sec" data-acao="apagarPagamento" data-id="${p.id}" data-divida="${d.id}" aria-label="Apagar pagamento">✕</button>` : ""}</li>`).join("") || "<li class='nota-texto'>Nenhum pagamento registrado.</li>"}</ul></div>
+    ${manual ? `<details class="secao"><summary>Editar dados</summary><div class="conteudo">${formularioDivida(d)}
+      <div class="botoes"><button class="botao peq" data-acao="salvarDivida" data-id="${d.id}">Salvar</button>
+      <button class="botao peq perigo" data-acao="quitarDivida" data-id="${d.id}">Marcar como quitada</button></div></div></details>` : ""}`);
+  ativarGraficos(folha);
+};
+acoes.registrarPagamento = async (el) => {
+  const valor = numeroDigitado($("#pgValor").value);
+  if (!valor) return avisar("Informe o valor", true);
+  try {
+    await fn("/pagar-divida", { divida_id: Number(el.dataset.id), data: $("#pgData").value, valor });
+    avisar("Pagamento registrado");
+    acoes.abrirDivida(el);
+    if (estado.aba === "patrimonio") telaPatrimonio();
+  } catch (e) { avisar(e.message, true); }
+};
+acoes.apagarPagamento = async (el) => {
+  try {
+    await q(sb.from("divida_pagamentos").delete().eq("id", Number(el.dataset.id)));
+    acoes.abrirDivida({ dataset: { id: el.dataset.divida } });
+  } catch (e) { avisar(e.message, true); }
+};
+acoes.quitarDivida = async (el) => {
+  if (el.dataset.confirmar !== "1") { el.dataset.confirmar = "1"; el.textContent = "Toque de novo para confirmar"; return; }
+  try { await q(sb.from("dividas").update({ ativa: false, saldo_devedor: 0 }).eq("id", Number(el.dataset.id))); fecharFolha(); recarregar(); }
+  catch (e) { avisar(e.message, true); }
+};
+
+// Ligar um lançamento do extrato a uma dívida (a partir da tela do lançamento)
+acoes.ligarDivida = async (el) => {
+  const sel = $("#dvLigar");
+  if (!sel.value) return avisar("Escolha a dívida", true);
+  el.disabled = true;
+  try {
+    const r = await fn("/pagar-divida", { divida_id: Number(sel.value), transacao_id: el.dataset.tx, aprender: $("#dvAprender").checked });
+    avisar(r.outros_reconhecidos ? `Registrado. Mais ${r.outros_reconhecidos} pagamento(s) reconhecido(s) no extrato.` : "Pagamento registrado na dívida");
+    fecharFolha();
+    recarregar();
+  } catch (e) { avisar(e.message, true); el.disabled = false; }
+};
+
 // ------------------------------------------------------------------ LOGIN
 function telaLogin(modo = "entrar", msg = "") {
   abas.hidden = true;
@@ -874,7 +1311,7 @@ async function iniciar() {
   await carregarCategorias();
   abas.hidden = false;
   const inicial = location.hash.replace("#", "");
-  await irPara(["inicio", "gastos", "escanear", "notas", "mais"].includes(inicial) ? inicial : "inicio");
+  await irPara(["inicio", "gastos", "escanear", "notas", "mais", "patrimonio"].includes(inicial) ? inicial : "inicio");
   processarFila();
 }
 iniciar();

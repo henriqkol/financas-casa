@@ -183,3 +183,16 @@ details.secao > summary::-webkit-details-marker { display: none; }
 details.secao > summary::after { content: "›"; color: var(--texto-3); font-size: 20px; transition: transform .15s; }
 details.secao[open] > summary::after { transform: rotate(90deg); }
 details.secao > .conteudo { padding: 0 16px 14px; }
+
+/* Gráfico de linha */
+.grafico { position: relative; }
+.grafico svg { width: 100%; height: auto; display: block; touch-action: pan-y; }
+.grafico .grade { stroke: var(--borda); stroke-width: 1; }
+.grafico .eixo { fill: var(--texto-3); font-size: 11px; font-variant-numeric: tabular-nums; }
+.grafico .linha-serie { fill: none; stroke: var(--acento); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.grafico .cursor { stroke: var(--texto-3); stroke-width: 1; stroke-dasharray: 3 3; vector-effect: non-scaling-stroke; }
+.grafico .marcador { fill: var(--acento); stroke: var(--superficie); stroke-width: 2; }
+.grafico .dica { position: absolute; top: 0; width: 120px; background: var(--superficie); border: 1px solid var(--borda); border-radius: 8px; padding: 6px 8px; box-shadow: var(--sombra); font-size: 12px; display: flex; flex-direction: column; pointer-events: none; }
+.grafico .dica span { color: var(--texto-2); }
+details.cartao > summary { list-style: none; }
+details.cartao > summary::-webkit-details-marker { display: none; }

@@ -220,3 +220,41 @@ test("pluggy: normalização de lançamentos", () => {
   const pagamento = normalizarTransacao({ id: "t3", accountId: "c2", description: "Pagamento recebido", amount: -500, date: "2026-09-22T00:00:00.000Z" }, "CREDIT");
   assert.equal(pagamento.sentido, "entrada");
 });
+
+// ------------------------------------------------------------------ patrimônio
+import { normalizarInvestimento, normalizarEmprestimo, reconhecerPagamentos } from "../supabase/functions/api/lib/patrimonio.ts";
+
+test("patrimônio: caixinha do Nubank vira aplicação com datas de Brasília", () => {
+  const i = normalizarInvestimento({
+    id: "x", name: "CDB - NU FINANCEIRA S.A.", type: "FIXED_INCOME", subtype: "CDB", rate: 100, rateType: "CDI",
+    amount: 1.01, balance: 0.99, amountOriginal: 0.8441970000000001, amountWithdrawal: 0.99, status: "ACTIVE",
+    issueDate: "2025-06-18T03:00:00.000Z", dueDate: "2027-06-18T03:00:00.000Z", issuer: "NU FINANCEIRA",
+  }, "item1");
+  assert.equal(i.data_aplicacao, "2025-06-18");
+  assert.equal(i.vencimento, "2027-06-18");
+  assert.equal(i.valor_aplicado, 0.84);
+  assert.equal(i.saldo_liquido, 0.99);
+  assert.equal(i.indexador, "CDI");
+});
+
+test("patrimônio: empréstimo do Open Finance", () => {
+  const d = normalizarEmprestimo({ id: "l1", productName: "Crédito pessoal", kind: "LOAN", contractAmount: 10000,
+    contractOutstandingBalance: 6000, totalNumberOfInstallments: 24, contractRemainingNumber: 12, CET: 45.1 });
+  assert.equal(d.tipo, "emprestimo");
+  assert.equal(d.parcelas_pagas, 12);
+  assert.equal(d.parcela_valor, 500);
+  assert.equal(d.ativa, true);
+  assert.equal(normalizarEmprestimo({ id: "l2", kind: "FINANCING", contractOutstandingBalance: 0 }).ativa, false);
+});
+
+test("patrimônio: reconhece pagamentos pelo texto do extrato", () => {
+  const usados = new Set(["t0"]);
+  const r = reconhecerPagamentos(
+    [{ id: 1, padrao_pagamento: "PIX TRANSF JOAO" }, { id: 2, padrao_pagamento: null }],
+    [
+      { id: "t0", data: "2026-09-01", valor: 300, descricao: "PIX TRANSF JOAO 01/09" },
+      { id: "t1", data: "2026-10-01", valor: 300, descricao: "PIX TRANSF JOAO 01/10" },
+      { id: "t2", data: "2026-10-02", valor: 50, descricao: "PIX TRANSF JOAOZINHO" },
+    ], usados);
+  assert.deepEqual(r, [{ divida_id: 1, transacao_id: "t1", data: "2026-10-01", valor: 300 }]);
+});

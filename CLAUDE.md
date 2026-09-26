@@ -20,5 +20,9 @@ App de controle financeiro doméstico do Rique (e da esposa). Tudo em português
 - **Vínculo nota ↔ gasto**: `lib/vinculo.ts` — mesmo valor (ou parcela × n), janela −3/+10 dias, bônus por CNPJ/nome. Automático só quando há um candidato claramente melhor; senão a nota fica "confirmar".
 - **Categorias**: regras regex (sistema) + exatas aprendidas das correções no app (prioridade 1) + IA opcional (Haiku) + tipo de loja. Nos resumos (`v_gastos`), gasto com nota é rateado pelas categorias dos itens.
 
+## Patrimônio
+- Investimentos: `/investments` da Pluggy a cada sync → `investimentos` + fotografia diária em `investimento_saldos`. Caixinhas do Nubank chegam como CDBs sem nome; o usuário associa cada aplicação a uma `caixinhas` no app.
+- Dívidas: `/loans` (Open Finance) + cadastro manual (`dividas`, saldo recalculado por `recalcular_divida()` a cada pagamento — tabela Price quando há juros) + fatura/parcelas do cartão nas visões. Pagamentos são reconhecidos no extrato por `padrao_pagamento` (só depois do cadastro).
+
 ## Análises
 Ver `docs/BASE.md` para as visões e consultas prontas.

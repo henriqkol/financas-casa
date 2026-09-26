@@ -65,6 +65,28 @@ export async function listarTransacoes(apiKey: string, contaId: string, desde: D
   return out;
 }
 
+/** Investimentos de um Item (paginação por página). */
+export async function listarInvestimentos(apiKey: string, itemId: string): Promise<any[]> {
+  const out: any[] = [];
+  for (let pagina = 1; pagina <= 50; pagina++) {
+    const j = await pluggyGet(apiKey, `/investments?itemId=${encodeURIComponent(itemId)}&pageSize=500&page=${pagina}`);
+    out.push(...(j.results ?? []));
+    if (!j.totalPages || pagina >= j.totalPages) break;
+  }
+  return out;
+}
+
+/** Empréstimos e financiamentos de um Item. */
+export async function listarEmprestimos(apiKey: string, itemId: string): Promise<any[]> {
+  const out: any[] = [];
+  for (let pagina = 1; pagina <= 20; pagina++) {
+    const j = await pluggyGet(apiKey, `/loans?itemId=${encodeURIComponent(itemId)}&page=${pagina}`);
+    out.push(...(j.results ?? []));
+    if (!j.totalPages || pagina >= j.totalPages) break;
+  }
+  return out;
+}
+
 /** Data do lançamento: datas "puras" vêm como T00:00:00.000Z e não devem ser deslocadas. */
 export function dataDoLancamento(iso: string): string {
   if (/T00:00:00(\.000)?Z$/.test(iso)) return iso.slice(0, 10);
