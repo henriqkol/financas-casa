@@ -11,7 +11,7 @@ App de controle financeiro doméstico do Rique (e da esposa). Tudo em português
 ## Como publicar mudanças
 - App: commit + push em `main` (o GitHub Pages atualiza sozinho; o service worker usa rede primeiro).
 - Banco: nova migração numerada em `supabase/migrations/` e aplicar pelo conector Supabase (`apply_migration`).
-- Função: `deploy_edge_function` pelo conector Supabase, nome `api`, enviando `index.ts` e `lib/*.ts`, `verify_jwt: false`.
+- Função: faça push em `main` e depois `deploy_edge_function` (nome `api`, `verify_jwt: false`) com um único `index.ts` que importa o código do GitHub fixado no commit: `import "https://raw.githubusercontent.com/henriqkol/financas-casa/<commit>/supabase/functions/api/index.ts";` (o repositório é público). Também funciona enviar `index.ts` + `lib/*.ts` diretamente.
 
 ## Fluxos principais
 - **Open Finance**: Meu Pluggy (grátis, uso pessoal). Credenciais e IDs de Item ficam em `app_config`/`pluggy_itens`, cadastrados na tela Mais. `pg_cron` chama `/api/sync` 2x/dia (`disparar_sync()` lê `functions_url` e `cron_secret` de `app_config`).
