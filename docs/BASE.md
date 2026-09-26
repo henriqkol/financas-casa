@@ -16,8 +16,9 @@ contas ──< transacoes >──< nota_transacao >──< notas ──< nota_it
   `removida = true` → o banco reapresentou o lançamento com outro id; **ignore nas análises**.
 - **notas / nota_itens**: notas fiscais escaneadas (NFC-e) e seus produtos, cada item com categoria.
 - **nota_transacao**: qual nota explica qual gasto (uma nota pode cobrir várias parcelas; um Pix pode cobrir várias notas).
-- **categorias**: `conta_como_gasto = false` para Pagamento de fatura, Transferência entre contas, Investimentos e Receitas
-  (evita contar a fatura do cartão duas vezes).
+- **categorias**: `natureza` = `despesa` | `receita` | `neutro` (movimento que não é consumo nem renda: fatura, transferência
+  entre contas próprias, investimentos, crédito contratado, pagamento de dívida). `classe` (só despesas) = `essencial` | `estilo_vida`,
+  base do plano 50/30/20. `conta_como_gasto = false` para tudo que não é despesa (evita contar a fatura do cartão duas vezes).
 
 ## Visões prontas (use estas primeiro)
 
@@ -26,7 +27,9 @@ contas ──< transacoes >──< nota_transacao >──< notas ──< nota_it
 | `v_gastos` | Uma linha por gasto × categoria. Gastos com nota são **divididos pelas categorias dos itens**. Filtre `conta_como_gasto = true` para somar gasto real. Colunas: transacao_id, data, mes (AAAA-MM), descricao, conta, conta_tipo, valor, categoria, grupo, via_nota |
 | `v_resumo_mensal` | Total por mês e categoria (só o que é gasto) |
 | `v_itens_comprados` | Todos os produtos comprados: data, loja, descrição, quantidade, preço unitário, total, categoria. Bom para comparar preços e consumo |
-| `v_pendencias` | Notas sem gasto ligado e gastos sem categoria |
+| `v_receitas` | Entradas que são renda (salário, Pix recebidos, reembolsos, rendimentos): transacao_id, data, mes, descricao, conta, valor, categoria |
+| `v_fluxo_mensal` | Por mês: receitas, despesas (consumo), pagamento_dividas e sobra |
+| `v_pendencias` | Notas sem gasto ligado e lançamentos (despesas ou receitas) sem categoria |
 
 ## Consultas úteis
 
@@ -43,6 +46,13 @@ from v_gastos where conta_como_gasto group by 1 order by 2 desc nulls last;
 -- Preço médio de um produto por loja
 select loja, round(avg(valor_unitario),2) preco_medio, count(*) compras
 from v_itens_comprados where descricao_norm like '%LEITE%' group by 1 order by 2;
+
+-- Quanto entrou, gastou e sobrou por mês
+select * from v_fluxo_mensal order by mes;
+
+-- Gasto por classe (essencial x estilo de vida) nos últimos meses
+select g.mes, c.classe, sum(g.valor) from v_gastos g join categorias c on c.id = g.categoria_id
+where g.conta_como_gasto group by 1, 2 order by 1, 2;
 
 -- Quanto dos gastos tem nota fiscal
 select mes, round(100 * sum(valor) filter (where via_nota) / sum(valor)) as pct_com_nota
@@ -62,7 +72,7 @@ where conta_como_gasto and not via_nota and mes = '2026-09' order by valor desc 
 | `v_investimentos_historico` | Saldo diário do total investido |
 | `investimento_saldos` | Fotografia diária de cada aplicação (a última sincronização do dia vale) |
 | `caixinhas` | Caixinhas criadas no app (o Open Finance não informa o nome: cada depósito numa caixinha do Nubank vira um CDB separado, associado à caixinha pelo usuário) |
-| `v_dividas` | Tudo o que se deve hoje: dívidas cadastradas, empréstimos do Open Finance, fatura atual e parcelas futuras do cartão |
+| `v_dividas` | Tudo o que se deve hoje: dívidas cadastradas, empréstimos do Open Finance, cheque especial (conta com saldo negativo), fatura atual e parcelas futuras do cartão |
 | `v_cartao_parcelas_futuras` | Compras parceladas com parcelas ainda por vir |
 | `dividas`, `divida_pagamentos`, `divida_saldos` | Cadastro, pagamentos (ligados ao extrato quando possível) e histórico do saldo devedor |
 
@@ -74,6 +84,13 @@ select dia, caixinha, saldo_liquido from v_caixinhas_historico order by dia, cai
 select (select coalesce(sum(saldo_liquido),0) from investimentos where status <> 'TOTAL_WITHDRAWAL')
      - (select coalesce(sum(saldo_devedor),0) from v_dividas) as patrimonio_liquido;
 ```
+
+## Planejamento e sugestões
+
+- `preferencias` (chave/valor): `renda_mensal` (vazio = o app estima pela média das receitas), `meta_poupanca_pct` (padrão 20), `reserva_meses` (padrão 6).
+- A tela Sugestões chama a função `api/sugestoes`, que calcula na hora (nada é gravado): plano 50/30/20 sobre a renda,
+  média dos 3 últimos meses completos, juros pagos por tipo, dívidas em ordem avalanche (maior juro primeiro),
+  comparação com o CDI (série 4389 do Banco Central) e reserva de emergência.
 
 ## Outras tabelas
 

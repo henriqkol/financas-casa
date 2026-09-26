@@ -30,6 +30,7 @@ import {
 } from "./lib/pluggy.ts";
 import { normalizarEmprestimo, normalizarInvestimento, reconhecerPagamentos } from "./lib/patrimonio.ts";
 import { categorizarComIA } from "./lib/ia.ts";
+import { gerarDiagnostico, mesesAnteriores, tipoDeJuros, type DadosSugestoes } from "./lib/sugestoes.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -105,7 +106,7 @@ async function categorias() {
 
 async function regras(): Promise<RegraCompilada[]> {
   const lista = await todos((de, ate) =>
-    db.from("regras_categoria").select("id, alvo, tipo, padrao, categoria_id, prioridade").range(de, ate)
+    db.from("regras_categoria").select("id, alvo, tipo, padrao, categoria_id, prioridade, sentido").range(de, ate)
   );
   return compilarRegras(lista as any);
 }
@@ -120,7 +121,7 @@ async function autorizar(req: Request, rota: string): Promise<{ email: string | 
   const segredo = req.headers.get("x-cron-secret");
   if (segredo) {
     const c = await lerConfig(["cron_secret"]);
-    if (c.cron_secret && segredo === c.cron_secret && rota === "/sync") return { email: null, cron: true };
+    if (c.cron_secret && segredo === c.cron_secret && ["/sync", "/recategorizar", "/sugestoes"].includes(rota)) return { email: null, cron: true };
     throw new HttpErro(401, "Segredo inválido");
   }
   const token = (req.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "");
@@ -561,6 +562,126 @@ async function reconhecerPagamentosDeDividas(): Promise<number> {
   return achados.length;
 }
 
+// ------------------------------------------------------------------ sugestões
+
+/** CDI anualizado do Banco Central (série SGS 4389), guardado por um dia. */
+async function cdiAnual(): Promise<number> {
+  const c = await lerConfig(["cdi_anual", "cdi_data"]);
+  const hoje = hojeBrasilia();
+  if (c.cdi_anual && c.cdi_data === hoje) return Number(c.cdi_anual);
+  try {
+    const r = await fetch("https://api.bcb.gov.br/dados/serie/bcdata.sgs.4389/dados/ultimos/1?formato=json", { signal: AbortSignal.timeout(8000) });
+    const j = await r.json();
+    const v = Number(String(j?.[0]?.valor ?? "").replace(",", "."));
+    if (Number.isFinite(v) && v > 0) {
+      await gravarConfig("cdi_anual", String(v));
+      await gravarConfig("cdi_data", hoje);
+      return v;
+    }
+  } catch { /* usa o último valor conhecido */ }
+  return Number(c.cdi_anual ?? 14.9);
+}
+
+async function montarSugestoes() {
+  const hoje = hojeBrasilia();
+  const ref = mesesAnteriores(hoje, 3);
+  const desdeMes = ref[0];
+  const desdeDia = `${desdeMes}-01`;
+  const catLista = ok(await db.from("categorias").select("id, nome, classe, natureza")) as any[];
+  const catPorId = Object.fromEntries(catLista.map((c) => [c.id, c]));
+  const catPorNome = Object.fromEntries(catLista.map((c) => [c.nome, c]));
+
+  const [gastosLin, receitasLin, fluxo, txs, contas, dividas, vdiv, invs, prefs, pend, notasUf] = await Promise.all([
+    todos((de, ate) => db.from("v_gastos").select("transacao_id, mes, categoria, categoria_id, valor, via_nota").eq("conta_como_gasto", true).gte("mes", desdeMes).range(de, ate)),
+    todos((de, ate) => db.from("v_receitas").select("mes, categoria, valor").gte("mes", desdeMes).range(de, ate)),
+    ok(await db.from("v_fluxo_mensal").select("mes, pagamento_dividas").gte("mes", desdeMes)),
+    todos((de, ate) => db.from("transacoes").select("id, data, descricao, recebedor_nome, valor, tipo_operacao, categoria_id").eq("sentido", "saida").eq("removida", false).gte("data", desdeDia).range(de, ate)),
+    ok(await db.from("contas").select("nome, apelido, tipo, saldo").eq("ativa", true)),
+    ok(await db.from("dividas").select("nome, tipo, saldo_devedor, taxa_juros_mensal, cet_anual, parcela_valor, origem").eq("ativa", true)),
+    ok(await db.from("v_dividas").select("fonte, saldo_devedor")),
+    ok(await db.from("investimentos").select("saldo_liquido, status")),
+    ok(await db.from("preferencias").select("chave, valor")),
+    ok(await db.from("v_pendencias").select("tipo")),
+    ok(await db.from("notas").select("uf").not("uf", "is", null).limit(200)),
+  ]) as any[];
+
+  // Gastos agregados por mês × categoria
+  const agg = new Map<string, { mes: string; categoria: string; classe: string | null; valor: number; ids: Set<string> }>();
+  for (const g of gastosLin) {
+    const k = `${g.mes}|${g.categoria}`;
+    const a = agg.get(k) ?? { mes: g.mes, categoria: g.categoria, classe: catPorId[g.categoria_id]?.classe ?? "estilo_vida", valor: 0, ids: new Set<string>() };
+    a.valor += Number(g.valor); a.ids.add(g.transacao_id);
+    agg.set(k, a);
+  }
+  const repasseCat = "Repasse família";
+  // Repasses: Pix sem nota categorizados como "Repasse família" + Pix que já têm nota ligada
+  const opPorTx = new Map((txs as any[]).map((t) => [t.id, t.tipo_operacao]));
+  const repasseSemNota = gastosLin.filter((g: any) => g.categoria === repasseCat && ref.includes(g.mes)).reduce((s: number, g: any) => s + Number(g.valor), 0);
+  const repasseNota = gastosLin.filter((g: any) => ref.includes(g.mes) && g.via_nota && opPorTx.get(g.transacao_id) === "PIX").reduce((s: number, g: any) => s + Number(g.valor), 0);
+  const repasseTotal = repasseSemNota + repasseNota;
+
+  // Juros e tarifas por tipo
+  const idJuros = catPorNome["Tarifas e juros"]?.id;
+  const juros = txs.filter((t: any) => t.categoria_id === idJuros)
+    .map((t: any) => ({ mes: t.data.slice(0, 7), tipo: tipoDeJuros(textoTx(t), t.tipo_operacao), valor: Number(t.valor) }));
+
+  // Recorrentes: mesma descrição em meses diferentes, valor parecido (últimos 3 meses completos)
+  const grupos = new Map<string, { descricao: string; categoria_id: number | null; meses: Map<string, number> }>();
+  for (const t of txs) {
+    const mes = t.data.slice(0, 7);
+    if (!ref.includes(mes)) continue;
+    const cat = catPorId[t.categoria_id];
+    if (cat && cat.natureza !== "despesa") continue;
+    if (cat?.nome === repasseCat || cat?.nome === "Tarifas e juros") continue;
+    const k = chaveAprendizado(textoTx(t));
+    if (!k) continue;
+    const g = grupos.get(k) ?? { descricao: t.recebedor_nome || t.descricao, categoria_id: t.categoria_id, meses: new Map() };
+    g.meses.set(mes, (g.meses.get(mes) ?? 0) + Number(t.valor));
+    grupos.set(k, g);
+  }
+  const recorrentes = [...grupos.values()].map((g) => {
+    const vals = [...g.meses.values()];
+    const media = vals.reduce((s, v) => s + v, 0) / vals.length;
+    const variacao = Math.max(...vals) / Math.max(Math.min(...vals), 0.01);
+    const cat = catPorId[g.categoria_id as number]?.nome ?? null;
+    return { descricao: g.descricao.replace(/^.*\|/, "").slice(0, 40), categoria: cat, valor_medio: media, meses: vals.length, variacao };
+  }).filter((r) => r.valor_medio >= 10 && ((r.meses >= 3 && r.variacao <= 1.25) || (r.categoria === "Assinaturas" && r.meses >= 2)))
+    .map(({ variacao: _v, ...r }) => r);
+
+  const p = Object.fromEntries((prefs as any[]).map((x) => [x.chave, x.valor]));
+  const dados: DadosSugestoes = {
+    hoje,
+    gastos: [...agg.values()].map((a) => ({ mes: a.mes, categoria: a.categoria, classe: a.classe, valor: a.valor, n: a.ids.size })),
+    receitas: (receitasLin as any[]).map((r) => ({ mes: r.mes, categoria: r.categoria, valor: Number(r.valor) })),
+    pagamentosDivida: (fluxo as any[]).map((f) => ({ mes: f.mes, valor: Number(f.pagamento_dividas) })),
+    juros, recorrentes,
+    contas: (contas as any[]).map((c) => ({ nome: c.apelido || c.nome, tipo: c.tipo, saldo: Number(c.saldo ?? 0) })),
+    dividas: (dividas as any[]).map((d) => ({
+      nome: d.nome, tipo: d.tipo, saldo: Number(d.saldo_devedor ?? 0), parcela: d.parcela_valor != null ? Number(d.parcela_valor) : null, origem: d.origem,
+      taxa_mensal: d.taxa_juros_mensal != null ? Number(d.taxa_juros_mensal)
+        : d.cet_anual != null ? Math.round((Math.pow(1 + Number(d.cet_anual) / 100, 1 / 12) - 1) * 10000) / 100 : null,
+    })),
+    cartao: {
+      fatura: (vdiv as any[]).filter((v) => v.fonte === "fatura").reduce((s, v) => s + Number(v.saldo_devedor), 0),
+      parcelas_futuras: (vdiv as any[]).filter((v) => v.fonte === "parcelas").reduce((s, v) => s + Number(v.saldo_devedor), 0),
+    },
+    investido: (invs as any[]).filter((i) => i.status !== "TOTAL_WITHDRAWAL").reduce((s, i) => s + Number(i.saldo_liquido ?? 0), 0),
+    repasse: { total: repasseTotal, com_nota: repasseNota },
+    prefs: {
+      renda_mensal: p.renda_mensal ? Number(p.renda_mensal) : null,
+      meta_poupanca_pct: Number(p.meta_poupanca_pct ?? 20),
+      reserva_meses: Number(p.reserva_meses ?? 6),
+    },
+    cdi_anual: await cdiAnual(),
+    pendencias: {
+      notas: (pend as any[]).filter((x) => x.tipo === "nota_sem_gasto").length,
+      sem_categoria: (pend as any[]).filter((x) => x.tipo === "gasto_sem_categoria").length,
+    },
+    ufs_notas: [...new Set((notasUf as any[]).map((n) => n.uf))],
+  };
+  return gerarDiagnostico(dados);
+}
+
 async function sincronizarConta(apiKey: string, conta: any, rg: RegraCompilada[], cat: Record<string, number>) {
   const { count } = await db.from("transacoes").select("id", { count: "exact", head: true }).eq("conta_id", conta.id);
   const diasAtras = (count ?? 0) === 0 ? 365 : 75;
@@ -742,16 +863,16 @@ Deno.serve(async (req) => {
       }
 
       case "/categorizar-transacao": {
-        const tx = ok(await db.from("transacoes").select("id, descricao, recebedor_nome").eq("id", corpo.transacao_id).single()) as any;
+        const tx = ok(await db.from("transacoes").select("id, descricao, recebedor_nome, sentido").eq("id", corpo.transacao_id).single()) as any;
         ok(await db.from("transacoes").update({ categoria_id: corpo.categoria_id, categoria_origem: "manual" }).eq("id", tx.id));
         let outros = 0;
         if (corpo.aprender) {
           const chave = chaveAprendizado(textoTx(tx));
           ok(await db.from("regras_categoria").upsert({
-            alvo: "transacao", tipo: "exato", padrao: chave, categoria_id: corpo.categoria_id, prioridade: 1, origem: "aprendida",
+            alvo: "transacao", tipo: "exato", padrao: chave, categoria_id: corpo.categoria_id, prioridade: 1, origem: "aprendida", sentido: tx.sentido,
           }, { onConflict: "alvo,tipo,padrao" }));
           const candidatos = await todos((de, ate) => db.from("transacoes").select("id, descricao, recebedor_nome")
-            .eq("removida", false).or("categoria_origem.is.null,categoria_origem.not.in.(manual,nota)").range(de, ate)) as any[];
+            .eq("removida", false).eq("sentido", tx.sentido).or("categoria_origem.is.null,categoria_origem.not.in.(manual,nota)").range(de, ate)) as any[];
           const alvo = candidatos.filter((t) => t.id !== tx.id && chaveAprendizado(textoTx(t)) === chave).map((t) => t.id);
           for (let i = 0; i < alvo.length; i += 200) {
             ok(await db.from("transacoes").update({ categoria_id: corpo.categoria_id, categoria_origem: "aprendida" }).in("id", alvo.slice(i, i + 200)));
@@ -782,6 +903,9 @@ Deno.serve(async (req) => {
         const outros = corpo.aprender ? await reconhecerPagamentosDeDividas() : 0;
         return json({ ok: true, outros_reconhecidos: outros });
       }
+
+      case "/sugestoes":
+        return json(await montarSugestoes());
 
       case "/sync-pagamentos":
         return json({ pagamentos: await reconhecerPagamentosDeDividas() });

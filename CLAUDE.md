@@ -24,5 +24,11 @@ App de controle financeiro doméstico do Rique (e da esposa). Tudo em português
 - Investimentos: `/investments` da Pluggy a cada sync → `investimentos` + fotografia diária em `investimento_saldos`. Caixinhas do Nubank chegam como CDBs sem nome; o usuário associa cada aplicação a uma `caixinhas` no app.
 - Dívidas: `/loans` (Open Finance) + cadastro manual (`dividas`, saldo recalculado por `recalcular_divida()` a cada pagamento — tabela Price quando há juros) + fatura/parcelas do cartão nas visões. Pagamentos são reconhecidos no extrato por `padrao_pagamento` (só depois do cadastro).
 
+## Receitas, plano e sugestões
+- Categorias têm `natureza` (despesa/receita/neutro) e `classe` (essencial/estilo_vida). Regras podem ter `sentido` (só entrada ou só saída); regras aprendidas guardam o sentido do lançamento.
+- Tela Movimentações (aba `gastos` no código) mostra despesas e receitas; itens neutros em cinza, fora das somas.
+- `lib/sugestoes.ts` (`gerarDiagnostico`) é pura e testada; `index.ts/montarSugestoes` só junta os dados. Economia total não soma alertas de ritmo nem conta duas vezes os juros do cheque especial.
+- Olho no topo das telas: oculta saldos, receitas, investimentos e dívidas (`Rp()` no app.js, classe `body.oculto`, lembrado no aparelho). Gastos e notas continuam visíveis (`R()`).
+
 ## Análises
 Ver `docs/BASE.md` para as visões e consultas prontas.

@@ -196,3 +196,48 @@ details.secao > .conteudo { padding: 0 16px 14px; }
 .grafico .dica span { color: var(--texto-2); }
 details.cartao > summary { list-style: none; }
 details.cartao > summary::-webkit-details-marker { display: none; }
+
+/* Movimentações: resumo do mês */
+#abas button span { font-size: 10.5px; white-space: nowrap; letter-spacing: -.1px; }
+.resumo-mov { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; text-align: center; }
+.resumo-mov > div { min-width: 0; }
+.resumo-mov > div > span { display: block; font-size: 12px; }
+.resumo-mov strong { display: block; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Sugestões e plano */
+.plano-linha { margin: 12px 0; }
+.plano-rotulo { display: flex; justify-content: space-between; gap: 8px; font-size: 14px; margin-bottom: 5px; flex-wrap: wrap; }
+.plano-trilho { position: relative; height: 10px; border-radius: 6px; background: var(--superficie-2); }
+.plano-trilho i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 6px; max-width: 100%; }
+.plano-trilho b { position: absolute; top: -4px; bottom: -4px; width: 2px; margin-left: -1px; background: var(--texto); border-radius: 1px; }
+.sugestao { border-left: 4px solid var(--superficie-2); }
+.sugestao.alerta { border-left-color: var(--alerta); }
+.sugestao.economia { border-left-color: var(--ok); }
+.sugestao.divida { border-left-color: #e5813b; }
+.sugestao.meta { border-left-color: #3b7dd8; }
+.sugestao.dica { border-left-color: var(--texto-3); }
+.sug-topo { display: flex; align-items: center; gap: 8px; }
+.icone-sug { width: 24px; height: 24px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-weight: 700; font-size: 13px; color: #fff; background: var(--texto-3); flex: none; }
+.icone-sug.alerta { background: var(--alerta); } .icone-sug.economia { background: var(--ok); }
+.icone-sug.divida { background: #e5813b; } .icone-sug.meta { background: #3b7dd8; }
+.sugestao h2 { font-size: 16px; }
+.topo h1 { font-size: clamp(18px, 5.4vw, 22px); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.topo .seletor-mes { flex: none; }
+.seletor-mes span { white-space: nowrap; min-width: 0; padding: 0 2px; }
+.dia { gap: 10px; } .dia > span:last-child { white-space: nowrap; flex: none; }
+.resumo-mov { padding-left: 10px; padding-right: 10px; gap: 4px; }
+.resumo-mov strong { font-size: 14px; letter-spacing: -.2px; }
+
+/* Máscara de valores (olho) */
+.olho { flex: none; margin-left: auto; width: 38px; height: 38px; border-radius: 50%; border: 1px solid var(--borda); background: var(--superficie); color: var(--texto-2); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; padding: 0; }
+.olho svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.topo .olho + .seletor-mes { margin-left: 0; }
+.olho .fechado, body.oculto .olho .aberto { display: none; }
+body.oculto .olho .fechado { display: inline-flex; }
+body.oculto .olho { color: var(--acento); }
+.priv .pm, body.oculto .priv .pv { display: none; }
+body.oculto .priv .pm { display: inline; letter-spacing: .5px; }
+body.oculto .priv-svg { visibility: hidden; }
+.topo:has(.olho) { gap: 6px; }
+.topo:has(.olho) h1 { font-size: clamp(17px, 4.6vw, 22px); }
+.topo:has(.olho) .seletor-mes button { width: 28px; }

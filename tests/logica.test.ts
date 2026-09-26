@@ -87,6 +87,10 @@ function regrasDoSql() {
   const sql = readFileSync(new URL("../supabase/migrations/0002_regras.sql", import.meta.url), "utf8");
   const base = readFileSync(new URL("../supabase/migrations/0001_base.sql", import.meta.url), "utf8");
   const nomes: string[] = [...base.matchAll(/^\s*\('([^']+)',\s*'[^']+',\s*'#/gm)].map((m) => m[1]);
+  const m6 = readFileSync(new URL("../supabase/migrations/0006_receitas_planejamento.sql", import.meta.url), "utf8");
+  for (const m of m6.matchAll(/^\s*\('([^']+)',\s*'[^']+',\s*'#/gm)) if (!nomes.includes(m[1])) nomes.push(m[1]);
+  nomes[nomes.indexOf("Receitas")] = "Outras receitas";
+  nomes.push("Pagamento de dívida"); // criada na 0005
   const regras: any[] = [];
   const re = /\('(item|transacao)', '((?:[^']|'')*)', '([^']+)', (\d+)\)/g;
   let m, id = 1;
@@ -94,13 +98,21 @@ function regrasDoSql() {
     if (!nomes.includes(m[3])) nomes.push(m[3]);
     regras.push({ id: id++, alvo: m[1], tipo: "regex", padrao: m[2].replace(/''/g, "'"), categoria_id: nomes.indexOf(m[3]) + 1, prioridade: Number(m[4]) });
   }
+  // Regras da 0006 (com sentido) e a regra de salário reescrita
+  const re6 = /\('((?:[^']|'')*)', '([^']+)', (\d+), (null|'entrada'|'saida')\)/g;
+  let m2;
+  while ((m2 = re6.exec(m6))) {
+    regras.push({ id: id++, alvo: "transacao", tipo: "regex", padrao: m2[1], categoria_id: nomes.indexOf(m2[2]) + 1, prioridade: Number(m2[3]), sentido: m2[4] === "null" ? null : m2[4].replace(/'/g, "") });
+  }
+  const sal = regras.find((r) => r.padrao.startsWith("(SALARIO|PROVENTOS"));
+  Object.assign(sal, { padrao: m6.match(/padrao = '([^']+)'/)![1], categoria_id: nomes.indexOf("Salário") + 1, prioridade: 7, sentido: "entrada" });
   return { regras: compilarRegras(regras), nomes, porNome: Object.fromEntries(nomes.map((n, i) => [n, i + 1])) };
 }
 
 test("regras: todas as expressões compilam", () => {
   const sql = readFileSync(new URL("../supabase/migrations/0002_regras.sql", import.meta.url), "utf8");
   const n = (sql.match(/\('(item|transacao)', '/g) ?? []).length;
-  assert.equal(regrasDoSql().regras.length, n);
+  assert.equal(regrasDoSql().regras.length, n + 7);
 });
 
 test("regras: itens de supermercado", () => {
@@ -149,7 +161,7 @@ test("regras: lançamentos bancários", () => {
   assert.equal(cat({ descricao: "PIX TRANSF FULANA 25/09" }), null);
   assert.equal(cat({ descricao: "PIX TRANSF MEU NOME", pagador_doc: "123.456.789-00", recebedor_doc: "12345678900" }), "Transferência entre contas");
   assert.equal(cat({ descricao: "Pagamento recebido", sentido: "entrada", conta_tipo: "CREDIT" }), "Pagamento de fatura");
-  assert.equal(cat({ descricao: "TED RECEBIDA EMPRESA X", sentido: "entrada", conta_tipo: "BANK" }), "Receitas");
+  assert.equal(cat({ descricao: "TED RECEBIDA EMPRESA X", sentido: "entrada", conta_tipo: "BANK" }), "Pix e transferências recebidas");
 
   // Regra aprendida (exata) vence as do sistema
   const aprendida = compilarRegras([...regras, { id: 999, alvo: "transacao", tipo: "exato", padrao: "PIX TRANSF FULANA", categoria_id: porNome["Repasse família"], prioridade: 1 }]);
@@ -257,4 +269,114 @@ test("patrimônio: reconhece pagamentos pelo texto do extrato", () => {
       { id: "t2", data: "2026-10-02", valor: 50, descricao: "PIX TRANSF JOAOZINHO" },
     ], usados);
   assert.deepEqual(r, [{ divida_id: 1, transacao_id: "t1", data: "2026-10-01", valor: 300 }]);
+});
+
+
+// ------------------------------------------------------------------ receitas e sugestões
+import { gerarDiagnostico, mesesAnteriores, taxaEstimada, tipoDeJuros } from "../supabase/functions/api/lib/sugestoes.ts";
+
+test("receitas: categorização por tipo de operação e texto", () => {
+  const { regras, nomes, porNome } = regrasDoSql();
+  const cat = (t: any) => { const r = categorizarTransacao({ sentido: "entrada", conta_tipo: "BANK", ...t }, regras, porNome); return r ? nomes[r.categoria_id - 1] : null; };
+  assert.equal(cat({ descricao: "Transferência Recebida", tipo_operacao: "PORTABILIDADE_SALARIO" }), "Salário");
+  assert.equal(cat({ descricao: "Resgate RDB", tipo_operacao: "RESGATE_APLIC_FINANCEIRA" }), "Investimentos");
+  assert.equal(cat({ descricao: "Transferência Recebida|IVAN KOLLING", tipo_operacao: "PIX" }), "Pix e transferências recebidas");
+  assert.equal(cat({ descricao: "Reembolso recebido pelo Pix|PIX Marketplace" }), "Reembolsos e estornos");
+  assert.equal(cat({ descricao: "ESTORNO JUROS DE FINANC", tipo_operacao: "ESTORNO" }), "Reembolsos e estornos");
+  assert.equal(cat({ descricao: "Transferência Recebida|SECR. DA RECEITA FEDERAL" }), "Reembolsos e estornos");
+  assert.equal(cat({ descricao: "RENEGOCIACAO CARTAO 1/1 R", conta_tipo: "CREDIT" }), "Crédito contratado");
+  assert.equal(cat({ descricao: "Valor adicionado na conta por cartão de crédito" }), "Transferência entre contas");
+  assert.equal(cat({ descricao: "Pagamento recebido", tipo_operacao: "PAGAMENTO_FATURA", conta_tipo: "CREDIT" }), "Pagamento de fatura");
+  assert.equal(cat({ descricao: "DEPOSITO QUALQUER" }), "Outras receitas");
+  // saídas não caem em regras de entrada
+  const saida = (t: any) => { const r = categorizarTransacao({ sentido: "saida", ...t }, regras, porNome); return r ? nomes[r.categoria_id - 1] : null; };
+  assert.equal(saida({ descricao: "FINANCIAM FAT 3/12" }), "Pagamento de dívida");
+  assert.equal(saida({ descricao: "SAÍDA JUROS LIMITE DA CONTA", tipo_operacao: "ENCARGOS_JUROS_CHEQUE_ESPECIAL" }), "Tarifas e juros");
+  assert.equal(saida({ descricao: "JUROS DE FINANCIAMENTO" }), "Tarifas e juros");
+});
+
+test("sugestões: meses de referência e juros", () => {
+  assert.deepEqual(mesesAnteriores("2026-01-15", 3), ["2025-10", "2025-11", "2025-12"]);
+  assert.equal(tipoDeJuros("SAÍDA JUROS LIMITE DA CONTA"), "cheque_especial");
+  assert.equal(tipoDeJuros("JUROS ATRASO PARC 3"), "atraso");
+  assert.equal(tipoDeJuros("JUROS DE FINANCIAMENTO"), "cartao");
+  assert.equal(taxaEstimada("cheque_especial", null).taxa, 8);
+  assert.equal(taxaEstimada("emprestimo", 2.5).estimada, false);
+});
+
+function dadosBase(extra: any = {}) {
+  const meses = ["2026-06", "2026-07", "2026-08"];
+  return {
+    hoje: "2026-09-20",
+    gastos: [
+      ...meses.flatMap((mes) => [
+        { mes, categoria: "Mercado", classe: "essencial", valor: 2000, n: 10 },
+        { mes, categoria: "Contas da casa", classe: "essencial", valor: 1500, n: 4 },
+        { mes, categoria: "Restaurante e delivery", classe: "estilo_vida", valor: 1200, n: 15 },
+        { mes, categoria: "Lazer", classe: "estilo_vida", valor: 800, n: 3 },
+        { mes, categoria: "Tarifas e juros", classe: "essencial", valor: 900, n: 6 },
+      ]),
+      { mes: "2026-09", categoria: "Mercado", classe: "essencial", valor: 2400, n: 9 },
+    ],
+    receitas: meses.map((mes) => ({ mes, categoria: "Salário", valor: 11300 })),
+    pagamentosDivida: meses.map((mes) => ({ mes, valor: 2300 })),
+    juros: meses.flatMap((mes) => [{ mes, tipo: "cheque_especial", valor: 600 }, { mes, tipo: "atraso", valor: 300 }]),
+    recorrentes: [{ descricao: "TELEFONICA BRASIL", categoria: "Contas da casa", valor_medio: 108, meses: 3 }],
+    contas: [{ nome: "Itaú", tipo: "BANK", saldo: -18141.64 }, { nome: "Nubank", tipo: "BANK", saldo: 9391.22 }],
+    dividas: [{ nome: "Empréstimo", tipo: "emprestimo", saldo: 10000, taxa_mensal: 3.2, parcela: 500, origem: "manual" }],
+    cartao: { fatura: 0, parcelas_futuras: 0 },
+    investido: 2,
+    repasse: { total: 3000, com_nota: 300 },
+    prefs: { renda_mensal: null, meta_poupanca_pct: 20, reserva_meses: 6 },
+    cdi_anual: 14.9,
+    pendencias: { notas: 0, sem_categoria: 3 },
+    ufs_notas: ["RS"],
+    ...extra,
+  };
+}
+
+test("sugestões: diagnóstico com cheque especial e dinheiro parado em outra conta", () => {
+  const r = gerarDiagnostico(dadosBase());
+  assert.equal(r.plano.renda, 11300);
+  assert.equal(r.plano.despesas_media, 6400);
+  assert.equal(r.plano.essencial.atual, 4400);
+  assert.equal(r.plano.gasto_ideal, 9040);
+  const ids = r.sugestoes.map((s: any) => s.id);
+  assert.equal(r.sugestoes[0].id, "cheque-Itaú");
+  const cheque = r.sugestoes[0];
+  assert.match(cheque.texto, /transferir R\$ 9\.391,22/);
+  assert.ok(cheque.economia_mensal > 250 && cheque.economia_mensal < 800, String(cheque.economia_mensal));
+  assert.ok(ids.includes("juros"));
+  assert.ok(ids.includes("ordem-dividas"));
+  assert.ok(ids.includes("portabilidade"));
+  assert.ok(ids.includes("delivery"));
+  assert.ok(ids.includes("alta-Mercado"), "Mercado 2400 até dia 20 projeta 3600 > 2000*1,3");
+  assert.ok(ids.includes("repasse"));
+  assert.ok(ids.includes("nfg"));
+  assert.ok(!ids.includes("saldo-parado"), "com cheque especial não sugere investir o saldo");
+  const ordem = r.sugestoes.find((s: any) => s.id === "ordem-dividas").itens;
+  assert.match(ordem[0].rotulo, /Cheque especial/);
+  assert.ok(r.economia_potencial > 0);
+});
+
+test("sugestões: sem dívidas sugere reserva e investir saldo parado", () => {
+  const r = gerarDiagnostico(dadosBase({
+    contas: [{ nome: "Nubank", tipo: "BANK", saldo: 20000 }], dividas: [], juros: [],
+    gastos: dadosBase().gastos.filter((g: any) => g.categoria !== "Tarifas e juros"),
+    pagamentosDivida: [], repasse: { total: 0, com_nota: 0 },
+  }));
+  const ids = r.sugestoes.map((s: any) => s.id);
+  assert.ok(ids.includes("saldo-parado"));
+  assert.ok(ids.includes("reserva"));
+  assert.ok(!ids.includes("ordem-dividas"));
+  assert.ok(!ids.includes("deficit"));
+  assert.equal(r.reserva.meta, 3500 * 6);
+});
+
+test("sugestões: renda informada tem prioridade e déficit vira alerta", () => {
+  const r = gerarDiagnostico(dadosBase({ prefs: { renda_mensal: 7000, meta_poupanca_pct: 20, reserva_meses: 6 } }));
+  assert.equal(r.plano.renda, 7000);
+  assert.equal(r.plano.origem_renda, "informada");
+  assert.ok(r.sugestoes.some((s: any) => s.id === "deficit"));
+  assert.ok(r.sugestoes.some((s: any) => s.id === "comprometimento"));
 });

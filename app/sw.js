@@ -1,6 +1,6 @@
 // Service worker: permite instalar o app e abri-lo sem internet.
 // Estratégia "rede primeiro": com internet, sempre pega a versão mais nova.
-const CACHE = "financas-v1";
+const CACHE = "financas-v2";
 const BASICO = ["./", "index.html", "estilo.css", "app.js", "scanner.js", "config.js", "manifest.webmanifest", "icons/icon-192.png"];
 
 self.addEventListener("install", (e) => {
