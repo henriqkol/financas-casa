@@ -749,7 +749,8 @@ async function dadosEMetas() {
     // + nome da carteira de destino (ex.: Pix para a própria conta PicPay vira "... PICPAY")
     saidas_mes: (saidas as any[]).map((t) => ({ id: t.id, data: t.data, valor: Number(t.valor),
       // e o nome da categoria (o texto do item pode ser "ASSINATURAS")
-      texto: [textoTx(t), t.observacao, cart.find((c) => c.ispb === t.recebedor_ispb)?.nome, t.categorias?.nome].filter(Boolean).join(" ") })),
+      // (a carteira só entra quando o Pix foi para a própria conta, ou seja, já está na categoria dela)
+      texto: [textoTx(t), t.observacao, cart.find((c) => c.ispb === t.recebedor_ispb && c.categoria === t.categorias?.nome)?.nome, t.categorias?.nome].filter(Boolean).join(" ") })),
     acordos: (acordos as any[]).map((a) => ({ ...a, parcela_valor: Number(a.parcela_valor), saldo_devedor: a.saldo_devedor != null ? Number(a.saldo_devedor) : null, vencimentos: a.vencimentos ?? [] })),
     pagamentos: pagamentos.map((x) => ({ ...x, valor: Number(x.valor) })),
     fluxo: (fluxo as any[]).map((f) => ({ mes: f.mes, sobra: Number(f.sobra) })),
