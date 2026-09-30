@@ -714,7 +714,7 @@ async function dadosEMetas() {
     ok(await db.from("orcamento_itens").select("*").eq("ativo", true).order("ordem")),
     todos((de, ate) => db.from("v_gastos").select("categoria_id, categoria, valor").eq("mes", mes).eq("conta_como_gasto", true).range(de, ate)),
     ok(await db.from("categorias").select("id").eq("nome", "Pix para esposa (sem nota)").maybeSingle()),
-    todos((de, ate) => db.from("transacoes").select("id, data, valor, descricao, recebedor_nome").eq("sentido", "saida").eq("removida", false)
+    todos((de, ate) => db.from("transacoes").select("id, data, valor, descricao, recebedor_nome, observacao").eq("sentido", "saida").eq("removida", false)
       .gte("data", `${mes}-01`).lte("data", hoje).range(de, ate)),
     ok(await db.from("dividas").select("id, nome, credor, parcela_valor, parcelas_total, parcelas_pagas, saldo_devedor, vencimentos, observacao").eq("tipo", "acordo").eq("ativa", true).order("id")),
     ok(await db.from("v_fluxo_mensal").select("mes, sobra").gte("mes", "2026-10")),
@@ -733,7 +733,8 @@ async function dadosEMetas() {
     grupos: (grupos as any[]).map((g) => ({ ...g, itens: (itens as any[]).filter((i) => i.grupo_id === g.id).map((i) => ({ ...i, valor: Number(i.valor) })) })),
     gastos_mes: (gastos as any[]).map((g) => ({ categoria_id: g.categoria_id, categoria: g.categoria, valor: Number(g.valor) })),
     pix_esposa_categoria_id: (pixCat as any)?.id ?? null,
-    saidas_mes: (saidas as any[]).map((t) => ({ id: t.id, data: t.data, valor: Number(t.valor), texto: textoTx(t) })),
+    // a observação escrita no app também vale (ex.: Pix sem nome do recebedor → "Telefonica")
+    saidas_mes: (saidas as any[]).map((t) => ({ id: t.id, data: t.data, valor: Number(t.valor), texto: [textoTx(t), t.observacao].filter(Boolean).join(" ") })),
     acordos: (acordos as any[]).map((a) => ({ ...a, parcela_valor: Number(a.parcela_valor), saldo_devedor: a.saldo_devedor != null ? Number(a.saldo_devedor) : null, vencimentos: a.vencimentos ?? [] })),
     pagamentos: pagamentos.map((x) => ({ ...x, valor: Number(x.valor) })),
     fluxo: (fluxo as any[]).map((f) => ({ mes: f.mes, sobra: Number(f.sobra) })),
