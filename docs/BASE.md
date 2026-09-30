@@ -99,6 +99,7 @@ select (select coalesce(sum(saldo_liquido),0) from investimentos where status <>
 | `dividas` (tipo `acordo`) | Acordos de 28/09/2026 com `vencimentos` (calendário das parcelas). Pagamentos reconhecidos por `padrao_pagamento` + valor da parcela ±15% em `divida_pagamentos` |
 | `objetivos` | Objetivos (colchão, acordos em dia, déficit zero, antecipar Itaú, FGTS, ITBI, renda na Faixa 4) e tarefas com data. `fonte` = progresso automático (colchao · acordos_em_dia · resultado_mensal) |
 | `preferencias` | `renda_mensal` = 7983.89 (líquido do salário base) · `acordos_ultimo_atraso` (reinicia a contagem de meses em dia) |
+| `transacoes.recebedor_ispb` + `preferencias.carteiras_despesa` | Banco de destino do Pix. A conta PicPay própria (ISPB 22896431) só paga Anthropic + Google One: Pix para ela conta como Assinaturas, não como transferência entre contas |
 | `contas.negativo_em_acordo` | Conta com saldo negativo já renegociado (Itaú): não conta como cheque especial em uso |
 
 A função `api/metas` monta o mês: resultado previsto (renda − orçamento − parcelas que vencem no mês), gasto por grupo, contas pagas/pendentes/atrasadas, acordos e objetivos.

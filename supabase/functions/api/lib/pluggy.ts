@@ -111,6 +111,7 @@ export interface LinhaTransacao {
   pagador_doc: string | null;
   recebedor_doc: string | null;
   recebedor_nome: string | null;
+  recebedor_ispb: string | null;     // banco de destino (ex.: 22896431 = PicPay)
   removida: boolean;
   raw: any;
   atualizado_em: string;
@@ -147,6 +148,7 @@ export function normalizarTransacao(t: any, contaTipo: string): LinhaTransacao {
     pagador_doc: soDigitos(pd.payer?.documentNumber?.value) || null,
     recebedor_doc: soDigitos(pd.receiver?.documentNumber?.value) || null,
     recebedor_nome: pd.receiver?.name ?? null,
+    recebedor_ispb: pd.receiver?.routingNumberISPB ?? null,
     removida: false,
     raw: t,
     atualizado_em: new Date().toISOString(),

@@ -551,3 +551,15 @@ test("metas: conta paga com vários Pix e padrão digitado no app", () => {
   assert.equal(parcial.status, "parcial");
   assert.equal(parcial.pago_valor, 46);
 });
+
+test("categorização: Pix para a própria conta PicPay é assinatura; para terceiros no PicPay, não", () => {
+  const { regras, porNome } = regrasDoSql();
+  const cart = [{ ispb: "22896431", nome: "PICPAY", categoria: "Assinaturas" }];
+  const eu = { descricao: "Transferência enviada|Henrique Kolling Limberger", sentido: "saida" as const, tipo_operacao: "PIX",
+    pagador_doc: "01024320073", recebedor_doc: "01024320073", recebedor_ispb: "22896431" };
+  assert.equal(categorizarTransacao(eu, regras, porNome, cart)?.categoria_id, porNome["Assinaturas"]);
+  // mesmo sem carteira configurada continua sendo transferência entre contas
+  assert.equal(categorizarTransacao(eu, regras, porNome)?.categoria_id, porNome["Transferência entre contas"]);
+  const outro = { ...eu, descricao: "Transferência enviada|Ricardo Silva Reis", recebedor_doc: "11122233344" };
+  assert.notEqual(categorizarTransacao(outro, regras, porNome, cart)?.categoria_id, porNome["Assinaturas"]);
+});

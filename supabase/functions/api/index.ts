@@ -21,7 +21,7 @@ import { chaveAprendizado, dataBrasilia, normalizar } from "./lib/texto.ts";
 import { decodificarHtml, extrairDoPortal, infoDaChave, lerQr, urlsDeConsulta } from "./lib/nfce.ts";
 import {
   aplicarRegras, categoriaDominante, categorizarTransacao, compilarRegras,
-  type RegraCompilada,
+  type CarteiraDespesa, type RegraCompilada,
 } from "./lib/categorizar.ts";
 import { candidatos, escolhaAutomatica, JANELA, type TxCandidata } from "./lib/vinculo.ts";
 import {
@@ -110,6 +110,16 @@ async function regras(): Promise<RegraCompilada[]> {
     db.from("regras_categoria").select("id, alvo, tipo, padrao, categoria_id, prioridade, sentido").range(de, ate)
   );
   return compilarRegras(lista as any);
+}
+
+/** Contas próprias em outros bancos usadas para pagar despesas (preferência carteiras_despesa, JSON). */
+async function carteiras(): Promise<CarteiraDespesa[]> {
+  const c = await lerPreferencia("carteiras_despesa");
+  try { return c ? JSON.parse(c) : []; } catch { return []; }
+}
+async function lerPreferencia(chave: string): Promise<string | null> {
+  const r = await db.from("preferencias").select("valor").eq("chave", chave).maybeSingle();
+  return (r.data as any)?.valor ?? null;
 }
 
 function textoTx(t: { descricao: string; recebedor_nome?: string | null }) {
@@ -442,6 +452,7 @@ async function sincronizar(origem: string) {
 
     const rg = await regras();
     const cats = await categorias();
+    const cart = await carteiras();
 
     for (const it of itens) {
       try {
@@ -463,7 +474,7 @@ async function sincronizar(origem: string) {
         resumo.contas += contas.length;
 
         for (const c of contas) {
-          const r = await sincronizarConta(apiKey, c, rg, cats.porNome);
+          const r = await sincronizarConta(apiKey, c, rg, cats.porNome, cart);
           resumo.novas += r.novas; resumo.atualizadas += r.atualizadas; resumo.removidas += r.removidas;
         }
 
@@ -705,6 +716,7 @@ async function montarSugestoes() {
 
 async function dadosEMetas() {
   await reconhecerPagamentosDeDividas().catch((e) => console.warn("pagamentos:", e));
+  const cart = await carteiras();
   const hoje = hojeBrasilia();
   const mes = hoje.slice(0, 7);
   const [prefs, receitas, grupos, itens, gastos, pixCat, saidas, acordos, fluxo, contas, invs, objetivos] = await Promise.all([
@@ -714,7 +726,7 @@ async function dadosEMetas() {
     ok(await db.from("orcamento_itens").select("*").eq("ativo", true).order("ordem")),
     todos((de, ate) => db.from("v_gastos").select("categoria_id, categoria, valor").eq("mes", mes).eq("conta_como_gasto", true).range(de, ate)),
     ok(await db.from("categorias").select("id").eq("nome", "Pix para esposa (sem nota)").maybeSingle()),
-    todos((de, ate) => db.from("transacoes").select("id, data, valor, descricao, recebedor_nome, observacao").eq("sentido", "saida").eq("removida", false)
+    todos((de, ate) => db.from("transacoes").select("id, data, valor, descricao, recebedor_nome, recebedor_ispb, observacao").eq("sentido", "saida").eq("removida", false)
       .gte("data", `${mes}-01`).lte("data", hoje).range(de, ate)),
     ok(await db.from("dividas").select("id, nome, credor, parcela_valor, parcelas_total, parcelas_pagas, saldo_devedor, vencimentos, observacao").eq("tipo", "acordo").eq("ativa", true).order("id")),
     ok(await db.from("v_fluxo_mensal").select("mes, sobra").gte("mes", "2026-10")),
@@ -734,7 +746,9 @@ async function dadosEMetas() {
     gastos_mes: (gastos as any[]).map((g) => ({ categoria_id: g.categoria_id, categoria: g.categoria, valor: Number(g.valor) })),
     pix_esposa_categoria_id: (pixCat as any)?.id ?? null,
     // a observação escrita no app também vale (ex.: Pix sem nome do recebedor → "Telefonica")
-    saidas_mes: (saidas as any[]).map((t) => ({ id: t.id, data: t.data, valor: Number(t.valor), texto: [textoTx(t), t.observacao].filter(Boolean).join(" ") })),
+    // + nome da carteira de destino (ex.: Pix para a própria conta PicPay vira "... PICPAY")
+    saidas_mes: (saidas as any[]).map((t) => ({ id: t.id, data: t.data, valor: Number(t.valor),
+      texto: [textoTx(t), t.observacao, cart.find((c) => c.ispb === t.recebedor_ispb)?.nome].filter(Boolean).join(" ") })),
     acordos: (acordos as any[]).map((a) => ({ ...a, parcela_valor: Number(a.parcela_valor), saldo_devedor: a.saldo_devedor != null ? Number(a.saldo_devedor) : null, vencimentos: a.vencimentos ?? [] })),
     pagamentos: pagamentos.map((x) => ({ ...x, valor: Number(x.valor) })),
     fluxo: (fluxo as any[]).map((f) => ({ mes: f.mes, sobra: Number(f.sobra) })),
@@ -750,7 +764,7 @@ async function dadosEMetas() {
   return r;
 }
 
-async function sincronizarConta(apiKey: string, conta: any, rg: RegraCompilada[], cat: Record<string, number>) {
+async function sincronizarConta(apiKey: string, conta: any, rg: RegraCompilada[], cat: Record<string, number>, cart: CarteiraDespesa[] = []) {
   const { count } = await db.from("transacoes").select("id", { count: "exact", head: true }).eq("conta_id", conta.id);
   const diasAtras = (count ?? 0) === 0 ? 365 : 75;
   const desde = new Date(Date.now() - diasAtras * 86400000);
@@ -771,7 +785,7 @@ async function sincronizarConta(apiKey: string, conta: any, rg: RegraCompilada[]
     if (ex && ex.categoria_id != null) {
       semMexerCategoria.push(l);
     } else {
-      const r = categorizarTransacao({ ...l, conta_tipo: conta.type }, rg, cat);
+      const r = categorizarTransacao({ ...l, conta_tipo: conta.type }, rg, cat, cart);
       comCategoria.push({ ...l, categoria_id: r?.categoria_id ?? null, categoria_origem: r?.origem ?? null });
     }
   }
@@ -821,6 +835,7 @@ async function recategorizar() {
   cacheCategorias = null;
   const rg = await regras();
   const cats = await categorias();
+  const cart = await carteiras();
 
   const itens = await todos((de, ate) => db.from("nota_itens")
     .select("id, descricao, categoria_id, categoria_origem, notas(nome_emitente)")
@@ -835,12 +850,12 @@ async function recategorizar() {
   }
 
   const txs = await todos((de, ate) => db.from("transacoes")
-    .select("id, descricao, recebedor_nome, sentido, tipo_operacao, pagador_doc, recebedor_doc, categoria_id, categoria_origem, contas(tipo)")
+    .select("id, descricao, recebedor_nome, recebedor_ispb, sentido, tipo_operacao, pagador_doc, recebedor_doc, categoria_id, categoria_origem, contas(tipo)")
     .eq("removida", false).range(de, ate)) as any[];
   let mudouTx = 0;
   for (const t of txs) {
     if (t.categoria_origem === "manual" || t.categoria_origem === "nota") continue;
-    const r = categorizarTransacao({ ...t, conta_tipo: t.contas?.tipo }, rg, cats.porNome);
+    const r = categorizarTransacao({ ...t, conta_tipo: t.contas?.tipo }, rg, cats.porNome, cart);
     const nova = r?.categoria_id ?? null;
     if (nova !== t.categoria_id) {
       ok(await db.from("transacoes").update({ categoria_id: nova, categoria_origem: r?.origem ?? null }).eq("id", t.id));
@@ -899,7 +914,7 @@ Deno.serve(async (req) => {
         // Volta a categoria do gasto para as regras
         const tx = ok(await db.from("transacoes").select("*, contas(tipo)").eq("id", corpo.transacao_id).single()) as any;
         if (tx.categoria_origem === "nota") {
-          const r = categorizarTransacao({ ...tx, conta_tipo: tx.contas?.tipo }, await regras(), (await categorias()).porNome);
+          const r = categorizarTransacao({ ...tx, conta_tipo: tx.contas?.tipo }, await regras(), (await categorias()).porNome, await carteiras());
           ok(await db.from("transacoes").update({ categoria_id: r?.categoria_id ?? null, categoria_origem: r?.origem ?? null }).eq("id", tx.id));
         }
         await atualizarCategoriaPelaNota(corpo.transacao_id);

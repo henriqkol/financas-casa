@@ -59,16 +59,31 @@ export interface TxParaCategorizar {
   pagador_doc?: string | null;
   recebedor_doc?: string | null;
   conta_tipo?: string | null;
+  recebedor_ispb?: string | null;
 }
+
+/** Contas do próprio usuário em outros bancos que servem só para pagar despesas (ex.: PicPay das assinaturas).
+ *  O dinheiro que vai para elas conta como gasto daquela categoria, não como transferência entre contas. */
+export interface CarteiraDespesa { ispb: string; nome: string; categoria: string }
 
 /** Categoria de um lançamento a partir das regras e de alguns sinais fixos. */
 export function categorizarTransacao(
   tx: TxParaCategorizar,
   regras: RegraCompilada[],
   cat: Record<string, number>,
+  carteiras: CarteiraDespesa[] = [],
 ): Resultado | null {
   const op = (tx.tipo_operacao ?? "").toUpperCase();
   const fixo = (nome: string): Resultado | null => cat[nome] ? { categoria_id: cat[nome], regra_id: null, origem: "padrao" } : null;
+  const carteira = tx.sentido === "saida" && tx.recebedor_ispb ? carteiras.find((c) => c.ispb === tx.recebedor_ispb) : undefined;
+  if (carteira && cat[carteira.categoria]) {
+    // Só vale para dinheiro mandado para si mesmo: mesmo CPF dos dois lados, ou o texto bate com a regra
+    // "é transferência para mim" (ex.: o nome do próprio usuário). Pix para outras pessoas nesse banco seguem normais.
+    const pag = soDigitos(tx.pagador_doc), rec = soDigitos(tx.recebedor_doc);
+    const porTexto = aplicarRegras([tx.descricao, tx.recebedor_nome].filter(Boolean).join(" "), regras, "transacao", tx.sentido);
+    const ehProprio = (!!pag && pag === rec) || (!!porTexto && porTexto.categoria_id === cat["Transferência entre contas"]);
+    if (ehProprio) return { categoria_id: cat[carteira.categoria], regra_id: null, origem: "padrao" };
+  }
   // Tipo de operação informado pelo banco (Open Finance) é o sinal mais confiável
   if (op === "PAGAMENTO_FATURA") return fixo("Pagamento de fatura");
   if (op === "RESGATE_APLIC_FINANCEIRA") return fixo("Investimentos");
