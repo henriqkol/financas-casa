@@ -104,7 +104,9 @@ export function montarMetas(d: DadosMetas) {
     const unico = candidatos.find((t) => Math.abs(t.valor - i.valor) <= Math.max(i.valor * 0.3, 10));
     // soma muito acima da conta (mais de 1,5×) indica outro pagamento ao mesmo favorecido: não conta
     const somaTodos = arred(candidatos.reduce((s, t) => s + t.valor, 0));
-    const usados = unico ? [unico] : somaTodos <= i.valor * 1.5 ? candidatos : [];
+    const todosServem = candidatos.length > 0 && somaTodos <= i.valor * 1.5;
+    // entre "um pagamento" e "todos somados", fica o que chega mais perto do valor da conta
+    const usados = unico && !(todosServem && Math.abs(somaTodos - i.valor) < Math.abs(unico.valor - i.valor)) ? [unico] : todosServem ? candidatos : [];
     const pagoTotal = arred(usados.reduce((s, t) => s + t.valor, 0));
     const quitada = !!unico || (usados.length > 0 && pagoTotal >= i.valor * 0.9);
     if (quitada) usados.forEach((t) => usadas.add(t.id));

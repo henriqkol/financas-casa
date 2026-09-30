@@ -544,6 +544,7 @@ test("metas: conta paga com vários Pix e padrão digitado no app", () => {
   ];
   const maes = montarMetas(base).contas.find((c: any) => c.nome === "Mães")!;
   assert.equal(maes.status, "pago");
+  assert.equal(maes.pago_valor, 196, "soma os dois Pix, mesmo que um sozinho já fique perto do valor");
   // só um dos dois Pix: pago em parte
   base.saidas_mes = base.saidas_mes.slice(1);
   const parcial = montarMetas(base).contas.find((c: any) => c.nome === "Mães")!;
