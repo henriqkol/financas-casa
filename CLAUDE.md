@@ -33,6 +33,9 @@ App de controle financeiro doméstico do Rique (e da esposa). Tudo em português
 ## Gráfico de evolução (Início)
 - `graficoEvolucao`/`baldesEvolucao` no app.js: despesas (`v_gastos`, só `conta_como_gasto`), receitas (`v_receitas`) e saldo investido (`v_investimentos_historico`). 1 ano/6 meses = totais por mês; 3 meses = por semana; 1 mês = acumulado diário. Um só eixo (tudo em R$). Cores validadas para daltonismo (laranja/verde-água/azul; investimentos tracejado). Some com o olho fechado.
 
+## Login com Google
+- Botão "Entrar com Google" aparece só se o provedor Google estiver ligado no Supabase (`/auth/v1/settings`). `signInWithOAuth` volta para a URL do app; o acesso continua controlado pela tabela `membros` (e-mail do Google precisa estar lá). Mesmo e-mail de uma conta com senha = mesmo usuário (o Supabase liga as identidades).
+
 ## Offline
 - Toda leitura via `q()` (GET do PostgREST) e `fn("/sugestoes" | "/config")` é guardada no IndexedDB `financas-cache` (chave = URL da consulta). Sem internet (`navigator.onLine === false` ou erro de rede) o app usa a cópia e mostra a faixa `#offline` com a data. Telas nunca abertas no aparelho mostram "Sem internet".
 - Sem internet o login não é renovado: `iniciar()` usa a sessão guardada no localStorage só para abrir os dados salvos. `Sair` apaga a cópia local.

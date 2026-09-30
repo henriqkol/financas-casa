@@ -269,3 +269,8 @@ body.oculto .priv-aviso { display: block; margin: 8px 0 0; }
 
 /* Faixa de modo offline */
 #offline { background: var(--alerta-2); color: var(--alerta); font-size: 13px; font-weight: 600; text-align: center; padding: 8px 12px; padding-top: calc(8px + env(safe-area-inset-top)); }
+
+/* Login com Google */
+.botao-google { width: 100%; margin-bottom: 4px; }
+.separador { display: flex; align-items: center; gap: 10px; margin: 14px 0 10px; color: var(--texto-3); font-size: 12.5px; }
+.separador::before, .separador::after { content: ""; flex: 1; border-top: 1px solid var(--borda); }

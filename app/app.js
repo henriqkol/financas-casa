@@ -1740,6 +1740,7 @@ function telaLogin(modo = "entrar", msg = "") {
     <div class="cartao">
       <h2 style="margin-bottom:6px">${titulos[modo]}</h2>
       ${msg ? `<p class="nota-texto">${msg}</p>` : ""}
+      ${modo === "entrar" ? `<div id="loginGoogle"></div>` : ""}
       <form id="formLogin">
         ${modo !== "nova" ? `<label class="campo"><span>E-mail</span><input type="email" id="email" autocomplete="email" required></label>` : ""}
         ${modo !== "recuperar" ? `<label class="campo"><span>Senha${modo !== "entrar" ? " (mínimo 8 caracteres)" : ""}</span><input type="password" id="senha" autocomplete="${modo === "entrar" ? "current-password" : "new-password"}" minlength="${modo === "entrar" ? 1 : 8}" required></label>` : ""}
@@ -1776,8 +1777,30 @@ function telaLogin(modo = "entrar", msg = "") {
       }
     } catch (err) { avisar(err.message, true); bt.disabled = false; }
   });
+  if (modo === "entrar") mostrarLoginGoogle();
 }
 acoes.modoLogin = (el) => telaLogin(el.dataset.m);
+
+/** Mostra "Entrar com Google" só se o provedor Google estiver ligado no Supabase. */
+async function mostrarLoginGoogle() {
+  const el = $("#loginGoogle");
+  if (!el || !navigator.onLine) return;
+  try {
+    const r = await fetch(`${SUPABASE_URL}/auth/v1/settings`, { headers: { apikey: SUPABASE_ANON_KEY } });
+    const cfg = await r.json();
+    if (!cfg?.external?.google || !$("#loginGoogle")) return;
+    el.innerHTML = `<button class="botao sec cheio botao-google" type="button" data-acao="entrarGoogle">Entrar com Google</button>
+      <div class="separador"><span>ou com e-mail e senha</span></div>`;
+  } catch { /* sem Google: fica só e-mail e senha */ }
+}
+acoes.entrarGoogle = async (el) => {
+  el.disabled = true;
+  const { error } = await sb.auth.signInWithOAuth({
+    provider: "google",
+    options: { redirectTo: location.origin + location.pathname, queryParams: { prompt: "select_account" } },
+  });
+  if (error) { avisar(error.message, true); el.disabled = false; }
+};
 
 // ------------------------------------------------------------------ início do app
 async function iniciar() {
@@ -1805,7 +1828,12 @@ async function iniciar() {
       if (salva?.user?.email) { session = salva; sessaoOffline = true; }
     } catch { /* sem sessão guardada */ }
   }
-  if (!session) return telaLogin();
+  if (!session) {
+    // Volta do Google com erro (ex.: cancelou a escolha da conta)
+    const erroOAuth = new URLSearchParams(HASH_INICIAL.slice(1) || location.search.slice(1)).get("error_description");
+    if (erroOAuth) { history.replaceState(null, "", location.pathname); return telaLogin("entrar", `Não foi possível entrar com o Google: ${esc(erroOAuth)}`); }
+    return telaLogin();
+  }
   estado.email = session.user.email?.toLowerCase();
 
   let membros = [], erroRede = false;
