@@ -2166,11 +2166,11 @@ async function carregarResumoMetas() {
     const tarefas = d.objetivos.filter((o) => o.tipo === "tarefa" && !o.concluido_em && o.data_alvo && o.data_alvo <= somarDiasISO(d.hoje, 7));
     el.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">Metas do mês</h3><span class="chip">abrir ›</span></div>
       <div class="plano-rotulo" style="margin-top:8px"><span>Resultado previsto</span><span class="num"><strong class="${r.previsto < 0 ? "sobe" : "desce"}">${Rp(Math.abs(r.previsto), sinal(r.previsto))}</strong></span></div>
-      ${barraPlano("Orçamento usado", r.gasto_real, r.metas_total, r.gasto_real > r.metas_total ? "var(--alerta)" : "var(--acento)", false, false, "meta")}
+      ${barraPlano("Orçamento usado", r.gasto_real, r.metas_total, r.gasto_real > r.metas_total ? "var(--alerta)" : "var(--acento)", false, true, "meta")}
       <ul class="lista">
-        ${atrasadas.length ? `<li class="linha"><span class="status-conta atrasado">!</span><div class="corpo"><div class="titulo">${atrasadas.length} conta${atrasadas.length > 1 ? "s" : ""} atrasada${atrasadas.length > 1 ? "s" : ""}</div><div class="meta">${atrasadas.map((c) => esc(c.nome)).join(", ")}</div></div></li>` : ""}
-        <li class="linha"><span class="status-conta ${pend.length ? "pendente" : "pago"}">${pend.length ? "○" : "✓"}</span><div class="corpo"><div class="titulo">${pend.length ? `${pend.length} conta${pend.length > 1 ? "s" : ""} a pagar` : "Todas as contas do mês pagas"}</div>${prox ? `<div class="meta">próxima: ${esc(prox.nome)} · ${dataCurta(prox.data).slice(0, 5)}</div>` : ""}</div></li>
-        ${tarefas.length ? `<li class="linha"><span class="status-conta hoje">•</span><div class="corpo"><div class="titulo">${tarefas.length} tarefa${tarefas.length > 1 ? "s" : ""} para esta semana</div><div class="meta">${esc(tarefas[0].titulo)}</div></div></li>` : ""}
+        ${atrasadas.length ? `<li class="linha"><span class="status-conta atrasado">!</span><div class="corpo"><div class="titulo">${atrasadas.length} conta${atrasadas.length > 1 ? "s" : ""} atrasada${atrasadas.length > 1 ? "s" : ""}</div><div class="meta priv-bloco">${atrasadas.map((c) => esc(c.nome)).join(", ")}</div></div></li>` : ""}
+        <li class="linha"><span class="status-conta ${pend.length ? "pendente" : "pago"}">${pend.length ? "○" : "✓"}</span><div class="corpo"><div class="titulo">${pend.length ? `${pend.length} conta${pend.length > 1 ? "s" : ""} a pagar` : "Todas as contas do mês pagas"}</div>${prox ? `<div class="meta priv-bloco">próxima: ${esc(prox.nome)} · ${dataCurta(prox.data).slice(0, 5)}</div>` : ""}</div></li>
+        ${tarefas.length ? `<li class="linha"><span class="status-conta hoje">•</span><div class="corpo"><div class="titulo">${tarefas.length} tarefa${tarefas.length > 1 ? "s" : ""} para esta semana</div><div class="meta priv-bloco">${esc(tarefas[0].titulo)}</div></div></li>` : ""}
       </ul>`;
   } catch (e) {
     el.innerHTML = `<h3>Metas do mês</h3><p class="nota-texto">Não consegui carregar (${esc(e.message)}).</p>`;
