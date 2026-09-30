@@ -1020,6 +1020,46 @@ acoes.excluirNota = async (el) => {
 };
 
 // ------------------------------------------------------------------ MAIS
+// ------------------------------------------------------------------ instalar o app
+// O Chrome avisa (beforeinstallprompt) quando o app pode ser instalado; guardamos o aviso para o botão.
+let pedidoInstalar = null;
+window.addEventListener("beforeinstallprompt", (e) => {
+  e.preventDefault();
+  pedidoInstalar = e;
+  if (estado.aba === "mais") atualizarCartaoInstalar();
+});
+window.addEventListener("appinstalled", () => { pedidoInstalar = null; atualizarCartaoInstalar(); avisar("App instalado"); });
+const appInstalado = () => matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+function cartaoInstalar() {
+  const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  let corpo;
+  if (appInstalado()) {
+    return "";   // já está aberto como app: nada a oferecer
+  } else if (pedidoInstalar) {
+    corpo = `<p class="nota-texto" style="margin:4px 0 12px">Com o app instalado ele abre em tela cheia, com ícone próprio, e funciona sem internet.</p>
+      <button class="botao cheio" data-acao="instalarApp">Instalar app</button>`;
+  } else if (ios) {
+    corpo = `<p class="nota-texto" style="margin:4px 0 0">No Safari, toque em <strong>Compartilhar</strong> (quadrado com seta) e depois em <strong>Adicionar à Tela de Início</strong>.</p>`;
+  } else {
+    corpo = `<p class="nota-texto" style="margin:4px 0 0">No Chrome, abra o menu <strong>⋮</strong> e toque em <strong>Instalar app</strong> (ou <strong>Adicionar à tela inicial</strong>). No computador, use o ícone de instalar na barra de endereço.</p>`;
+  }
+  return `<div class="cartao" id="cartaoInstalar"><h2 style="margin:0">Instalar no celular</h2>${corpo}</div>`;
+}
+function atualizarCartaoInstalar() {
+  const el = $("#cartaoInstalar");
+  if (!el) return;
+  const novo = cartaoInstalar();
+  if (novo) el.outerHTML = novo; else el.remove();
+}
+acoes.instalarApp = async () => {
+  if (!pedidoInstalar) return atualizarCartaoInstalar();
+  pedidoInstalar.prompt();
+  const { outcome } = await pedidoInstalar.userChoice.catch(() => ({}));
+  pedidoInstalar = null;
+  if (outcome !== "accepted") avisar("Instalação cancelada. Você pode instalar depois pelo menu do Chrome.");
+  atualizarCartaoInstalar();
+};
+
 async function telaMais() {
   app.innerHTML = `<div class="topo"><h1>Mais</h1></div><div id="conteudo">${carregando()}</div>`;
   const [cfg, itens, contas, logs, membros, regras] = await Promise.all([
@@ -1033,6 +1073,7 @@ async function telaMais() {
   const ultimo = logs[0];
 
   $("#conteudo").innerHTML = `
+    ${cartaoInstalar()}
     <div class="cartao">
       <div class="linha" style="cursor:default"><div class="corpo"><div class="titulo">Open Finance</div>
       <div class="meta">${ultimo ? `Última: ${haQuanto(ultimo.fim ?? ultimo.inicio)}${ultimo.ok === false ? ` · <span class="erro-texto">${esc(ultimo.mensagem ?? "")}</span>` : ""}` : "Nunca sincronizado"}</div></div>
