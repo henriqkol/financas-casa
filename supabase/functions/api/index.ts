@@ -588,7 +588,7 @@ async function montarSugestoes() {
   const ref = mesesAnteriores(hoje, 3);
   const desdeMes = ref[0];
   const desdeDia = `${desdeMes}-01`;
-  const catLista = ok(await db.from("categorias").select("id, nome, classe, natureza, meta_valor, periodicidade_meses")) as any[];
+  const catLista = ok(await db.from("categorias").select("id, nome, classe, natureza")) as any[];
   const desde12 = mesesAnteriores(hoje, 12)[0];   // imprevistos e viagens usam 12 meses
   const catPorId = Object.fromEntries(catLista.map((c) => [c.id, c]));
   const catPorNome = Object.fromEntries(catLista.map((c) => [c.nome, c]));
