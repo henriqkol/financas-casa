@@ -33,6 +33,11 @@ App de controle financeiro doméstico do Rique (e da esposa). Tudo em português
 ## Gráfico de evolução (Início)
 - `graficoEvolucao`/`baldesEvolucao` no app.js: despesas (`v_gastos`, só `conta_como_gasto`), receitas (`v_receitas`) e saldo investido (`v_investimentos_historico`). 1 ano/6 meses = totais por mês; 3 meses = por semana; 1 mês = acumulado diário. Um só eixo (tudo em R$). Cores validadas para daltonismo (laranja/verde-água/azul; investimentos tracejado). Some com o olho fechado.
 
+## Metas (plano de 28/09/2026)
+- Tela Metas (abas Mês · Acordos · Objetivos) + cartão no Início. Dados de `api/metas` (`lib/metas.ts`, pura e testada).
+- Orçamento = `orcamento_grupos`/`orcamento_itens` (editáveis no app). Acordos = `dividas` tipo `acordo` com `vencimentos`. Objetivos/tarefas = `objetivos`. Detalhes em docs/BASE.md.
+- Metas por categoria (0008) foram removidas: a meta vive no orçamento.
+
 ## Login com Google
 - Botão "Entrar com Google" aparece só se o provedor Google estiver ligado no Supabase (`/auth/v1/settings`). `signInWithOAuth` volta para a URL do app; o acesso continua controlado pela tabela `membros` (e-mail do Google precisa estar lá). Mesmo e-mail de uma conta com senha = mesmo usuário (o Supabase liga as identidades).
 

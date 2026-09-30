@@ -31,6 +31,7 @@ import {
 import { normalizarEmprestimo, normalizarInvestimento, reconhecerPagamentos } from "./lib/patrimonio.ts";
 import { categorizarComIA } from "./lib/ia.ts";
 import { gerarDiagnostico, mesesAnteriores, tipoDeJuros, type DadosSugestoes } from "./lib/sugestoes.ts";
+import { montarMetas } from "./lib/metas.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -121,7 +122,7 @@ async function autorizar(req: Request, rota: string): Promise<{ email: string | 
   const segredo = req.headers.get("x-cron-secret");
   if (segredo) {
     const c = await lerConfig(["cron_secret"]);
-    if (c.cron_secret && segredo === c.cron_secret && ["/sync", "/recategorizar", "/sugestoes"].includes(rota)) return { email: null, cron: true };
+    if (c.cron_secret && segredo === c.cron_secret && ["/sync", "/recategorizar", "/sugestoes", "/metas"].includes(rota)) return { email: null, cron: true };
     throw new HttpErro(401, "Segredo inválido");
   }
   const token = (req.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "");
@@ -538,7 +539,7 @@ async function sincronizarEmprestimos(apiKey: string, itemId: string): Promise<n
 
 /** Liga ao cadastro de dívidas os lançamentos que batem com o "texto do extrato" de cada dívida. */
 async function reconhecerPagamentosDeDividas(): Promise<number> {
-  const dividas = ok(await db.from("dividas").select("id, padrao_pagamento, data_inicio, criado_em").eq("origem", "manual").eq("ativa", true).not("padrao_pagamento", "is", null)) as any[];
+  const dividas = ok(await db.from("dividas").select("id, padrao_pagamento, parcela_valor, data_inicio, criado_em").eq("origem", "manual").eq("ativa", true).not("padrao_pagamento", "is", null)) as any[];
   if (!dividas.length) return 0;
   const desde = addDias(hojeBrasilia(), -75);
   const txs = await todos((de, ate) => db.from("transacoes")
@@ -592,12 +593,16 @@ async function montarSugestoes() {
   const catPorId = Object.fromEntries(catLista.map((c) => [c.id, c]));
   const catPorNome = Object.fromEntries(catLista.map((c) => [c.nome, c]));
 
+  const [orcGrupos, orcItens] = await Promise.all([
+    db.from("orcamento_grupos").select("id, nome, categorias").then((r) => r.data ?? []),
+    db.from("orcamento_itens").select("grupo_id, nome, valor, periodicidade_meses, ativo").then((r) => r.data ?? []),
+  ]);
   const [gastosLin, receitasLin, fluxo, txs, contas, dividas, vdiv, invs, prefs, pend, notasUf] = await Promise.all([
     todos((de, ate) => db.from("v_gastos").select("transacao_id, mes, categoria, categoria_id, valor, via_nota").eq("conta_como_gasto", true).gte("mes", desde12).range(de, ate)),
     todos((de, ate) => db.from("v_receitas").select("mes, categoria, valor").gte("mes", desdeMes).range(de, ate)),
     ok(await db.from("v_fluxo_mensal").select("mes, pagamento_dividas").gte("mes", desdeMes)),
     todos((de, ate) => db.from("transacoes").select("id, data, descricao, recebedor_nome, valor, tipo_operacao, categoria_id").eq("sentido", "saida").eq("removida", false).gte("data", desdeDia).range(de, ate)),
-    ok(await db.from("contas").select("nome, apelido, tipo, saldo").eq("ativa", true)),
+    ok(await db.from("contas").select("nome, apelido, tipo, saldo, negativo_em_acordo").eq("ativa", true)),
     ok(await db.from("dividas").select("nome, tipo, saldo_devedor, taxa_juros_mensal, cet_anual, parcela_valor, origem").eq("ativa", true)),
     ok(await db.from("v_dividas").select("fonte, saldo_devedor")),
     ok(await db.from("investimentos").select("saldo_liquido, status")),
@@ -656,7 +661,7 @@ async function montarSugestoes() {
     receitas: (receitasLin as any[]).map((r) => ({ mes: r.mes, categoria: r.categoria, valor: Number(r.valor) })),
     pagamentosDivida: (fluxo as any[]).map((f) => ({ mes: f.mes, valor: Number(f.pagamento_dividas) })),
     juros, recorrentes,
-    contas: (contas as any[]).map((c) => ({ nome: c.apelido || c.nome, tipo: c.tipo, saldo: Number(c.saldo ?? 0) })),
+    contas: (contas as any[]).map((c) => ({ nome: c.apelido || c.nome, tipo: c.tipo, saldo: Number(c.saldo ?? 0), em_acordo: !!c.negativo_em_acordo })),
     dividas: (dividas as any[]).map((d) => ({
       nome: d.nome, tipo: d.tipo, saldo: Number(d.saldo_devedor ?? 0), parcela: d.parcela_valor != null ? Number(d.parcela_valor) : null, origem: d.origem,
       taxa_mensal: d.taxa_juros_mensal != null ? Number(d.taxa_juros_mensal)
@@ -673,10 +678,19 @@ async function montarSugestoes() {
       meta_poupanca_pct: Number(p.meta_poupanca_pct ?? 20),
       reserva_meses: Number(p.reserva_meses ?? 6),
     },
-    metas: catLista.filter((c) => c.meta_valor != null && Number(c.meta_valor) > 0).map((c) => ({
-      categoria: c.nome, classe: c.classe, periodicidade_meses: Number(c.periodicidade_meses ?? 1),
-      meta_mensal: Number(c.meta_valor) / Number(c.periodicidade_meses ?? 1),
-    })),
+    metas: [
+      // Grupos do orçamento (meta mensal = soma dos itens)
+      ...(orcGrupos as any[]).map((g) => {
+        const its = (orcItens as any[]).filter((i) => i.grupo_id === g.id && i.ativo);
+        return { categoria: g.nome, classe: null, periodicidade_meses: 1,
+          meta_mensal: its.reduce((s, i) => s + Number(i.valor) / Number(i.periodicidade_meses || 1), 0),
+          categorias: (g.categorias ?? []).map((id: number) => catPorId[id]?.nome).filter(Boolean) };
+      }).filter((m) => m.meta_mensal > 0),
+      // Itens que não vencem todo mês viram provisão
+      ...(orcItens as any[]).filter((i) => i.ativo && Number(i.periodicidade_meses) > 1).map((i) => ({
+        categoria: i.nome, classe: null, periodicidade_meses: Number(i.periodicidade_meses), meta_mensal: Number(i.valor) / Number(i.periodicidade_meses), categorias: [],
+      })),
+    ],
     cdi_anual: await cdiAnual(),
     pendencias: {
       notas: (pend as any[]).filter((x) => x.tipo === "nota_sem_gasto").length,
@@ -685,6 +699,53 @@ async function montarSugestoes() {
     ufs_notas: [...new Set((notasUf as any[]).map((n) => n.uf))],
   };
   return gerarDiagnostico(dados);
+}
+
+// ------------------------------------------------------------------ metas
+
+async function dadosEMetas() {
+  await reconhecerPagamentosDeDividas().catch((e) => console.warn("pagamentos:", e));
+  const hoje = hojeBrasilia();
+  const mes = hoje.slice(0, 7);
+  const [prefs, receitas, grupos, itens, gastos, pixCat, saidas, acordos, fluxo, contas, invs, objetivos] = await Promise.all([
+    ok(await db.from("preferencias").select("chave, valor")),
+    todos((de, ate) => db.from("v_receitas").select("valor").eq("mes", mes).range(de, ate)),
+    ok(await db.from("orcamento_grupos").select("id, nome, ordem, categorias, observacao")),
+    ok(await db.from("orcamento_itens").select("*").eq("ativo", true).order("ordem")),
+    todos((de, ate) => db.from("v_gastos").select("categoria_id, categoria, valor").eq("mes", mes).eq("conta_como_gasto", true).range(de, ate)),
+    ok(await db.from("categorias").select("id").eq("nome", "Pix para esposa (sem nota)").maybeSingle()),
+    todos((de, ate) => db.from("transacoes").select("id, data, valor, descricao, recebedor_nome").eq("sentido", "saida").eq("removida", false)
+      .gte("data", `${mes}-01`).lte("data", hoje).range(de, ate)),
+    ok(await db.from("dividas").select("id, nome, credor, parcela_valor, parcelas_total, parcelas_pagas, saldo_devedor, vencimentos, observacao").eq("tipo", "acordo").eq("ativa", true).order("id")),
+    ok(await db.from("v_fluxo_mensal").select("mes, sobra").gte("mes", "2026-10")),
+    ok(await db.from("contas").select("tipo, saldo, negativo_em_acordo").eq("ativa", true)),
+    ok(await db.from("investimentos").select("saldo_liquido, status")),
+    ok(await db.from("objetivos").select("*")),
+  ]) as any[];
+  const p = Object.fromEntries((prefs as any[]).map((x) => [x.chave, x.valor]));
+  const idsAcordos = (acordos as any[]).map((a) => a.id);
+  const pagamentos = idsAcordos.length ? ok(await db.from("divida_pagamentos").select("divida_id, data, valor").in("divida_id", idsAcordos)) as any[] : [];
+  const colchao = (contas as any[]).filter((c) => c.tipo === "BANK" && Number(c.saldo) > 0).reduce((s, c) => s + Number(c.saldo), 0)
+    + (invs as any[]).filter((i) => i.status !== "TOTAL_WITHDRAWAL").reduce((s, i) => s + Number(i.saldo_liquido ?? 0), 0);
+  const r = montarMetas({
+    hoje, renda_plano: Number(p.renda_mensal ?? 0),
+    receitas_mes: (receitas as any[]).reduce((s, x) => s + Number(x.valor), 0),
+    grupos: (grupos as any[]).map((g) => ({ ...g, itens: (itens as any[]).filter((i) => i.grupo_id === g.id).map((i) => ({ ...i, valor: Number(i.valor) })) })),
+    gastos_mes: (gastos as any[]).map((g) => ({ categoria_id: g.categoria_id, categoria: g.categoria, valor: Number(g.valor) })),
+    pix_esposa_categoria_id: (pixCat as any)?.id ?? null,
+    saidas_mes: (saidas as any[]).map((t) => ({ id: t.id, data: t.data, valor: Number(t.valor), texto: textoTx(t) })),
+    acordos: (acordos as any[]).map((a) => ({ ...a, parcela_valor: Number(a.parcela_valor), saldo_devedor: a.saldo_devedor != null ? Number(a.saldo_devedor) : null, vencimentos: a.vencimentos ?? [] })),
+    pagamentos: pagamentos.map((x) => ({ ...x, valor: Number(x.valor) })),
+    fluxo: (fluxo as any[]).map((f) => ({ mes: f.mes, sobra: Number(f.sobra) })),
+    colchao,
+    objetivos: (objetivos as any[]).map((o) => ({ ...o, valor_alvo: o.valor_alvo != null ? Number(o.valor_alvo) : null, valor_atual: o.valor_atual != null ? Number(o.valor_atual) : null })),
+    inicio_relogio: p.acordos_ultimo_atraso ?? "2026-09-28",
+  });
+  // Atraso quebra a sequência de meses em dia: o relógio recomeça a partir de hoje
+  if (r.atraso_acordo && p.acordos_ultimo_atraso !== hoje) {
+    await db.from("preferencias").upsert({ chave: "acordos_ultimo_atraso", valor: hoje, atualizado_em: new Date().toISOString() });
+  }
+  return r;
 }
 
 async function sincronizarConta(apiKey: string, conta: any, rg: RegraCompilada[], cat: Record<string, number>) {
@@ -911,6 +972,9 @@ Deno.serve(async (req) => {
 
       case "/sugestoes":
         return json(await montarSugestoes());
+
+      case "/metas":
+        return json(await dadosEMetas());
 
       case "/sync-pagamentos":
         return json({ pagamentos: await reconhecerPagamentosDeDividas() });

@@ -33,7 +33,6 @@ contas ──< transacoes >──< nota_transacao >──< notas ──< nota_it
 | `v_resumo_mensal` | Total por mês e categoria (só o que é gasto) |
 | `v_itens_comprados` | Todos os produtos comprados: data, loja, descrição, quantidade, preço unitário, total, categoria. Bom para comparar preços e consumo |
 | `v_receitas` | Entradas que são renda (salário, Pix recebidos, reembolsos, rendimentos): transacao_id, data, mes, descricao, conta, valor, categoria |
-| `v_metas` | Categorias com meta: meta mensal equivalente e gasto no mês atual |
 | `v_fluxo_mensal` | Por mês: receitas, despesas (consumo), pagamento_dividas e sobra |
 | `v_pendencias` | Notas sem gasto ligado e lançamentos (despesas ou receitas) sem categoria |
 
@@ -89,6 +88,25 @@ select dia, caixinha, saldo_liquido from v_caixinhas_historico order by dia, cai
 -- Patrimônio líquido hoje
 select (select coalesce(sum(saldo_liquido),0) from investimentos where status <> 'TOTAL_WITHDRAWAL')
      - (select coalesce(sum(saldo_devedor),0) from v_dividas) as patrimonio_liquido;
+```
+
+## Plano financeiro e metas (desde 28/09/2026)
+
+| Tabela | Para quê |
+|---|---|
+| `orcamento_grupos` | Grupos do orçamento (Moradia, Alimentação, Carro, Cachorros, Assinaturas, Medicação, Doação e família) e as categorias (`categorias` = ids) cujo gasto conta em cada um |
+| `orcamento_itens` | Itens de cada grupo: `valor` por ocorrência, `periodicidade_meses`, `tipo` conta (vira checklist do mês, reconhecida no extrato por `padrao` + valor ±30%) ou envelope, `dia_vencimento`, `forma_pagamento`. Meta mensal = valor ÷ periodicidade |
+| `dividas` (tipo `acordo`) | Acordos de 28/09/2026 com `vencimentos` (calendário das parcelas). Pagamentos reconhecidos por `padrao_pagamento` + valor da parcela ±15% em `divida_pagamentos` |
+| `objetivos` | Objetivos (colchão, acordos em dia, déficit zero, antecipar Itaú, FGTS, ITBI, renda na Faixa 4) e tarefas com data. `fonte` = progresso automático (colchao · acordos_em_dia · resultado_mensal) |
+| `preferencias` | `renda_mensal` = 7983.89 (líquido do salário base) · `acordos_ultimo_atraso` (reinicia a contagem de meses em dia) |
+| `contas.negativo_em_acordo` | Conta com saldo negativo já renegociado (Itaú): não conta como cheque especial em uso |
+
+A função `api/metas` monta o mês: resultado previsto (renda − orçamento − parcelas que vencem no mês), gasto por grupo, contas pagas/pendentes/atrasadas, acordos e objetivos.
+
+```sql
+-- Meta mensal por grupo
+select g.nome, sum(i.valor / i.periodicidade_meses) as meta_mensal
+from orcamento_grupos g join orcamento_itens i on i.grupo_id = g.id and i.ativo group by 1 order by 2 desc;
 ```
 
 ## Planejamento e sugestões

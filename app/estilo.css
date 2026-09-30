@@ -282,3 +282,19 @@ body.fundo-privado #app { filter: blur(18px); }
 .icone-cadeado { width: 56px; height: 56px; margin: 4px auto 0; border-radius: 50%; background: var(--acento-2); color: var(--acento); display: flex; align-items: center; justify-content: center; }
 .icone-cadeado svg { width: 28px; height: 28px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .plano-sub { margin: -8px 0 10px; font-size: 12.5px; }
+
+/* Metas */
+.status-conta { width: 26px; height: 26px; border-radius: 50%; flex: none; display: inline-flex; align-items: center; justify-content: center; font-weight: 700; font-size: 14px; border: 2px solid var(--borda); color: var(--texto-3); margin-right: 2px; }
+.status-conta.pago { background: var(--ok); border-color: var(--ok); color: #fff; }
+.status-conta.atrasado { background: var(--alerta); border-color: var(--alerta); color: #fff; }
+.status-conta.hoje { border-color: var(--alerta); color: var(--alerta); }
+.conta-mes.pago .titulo { color: var(--texto-2); }
+details.pagas summary { cursor: pointer; padding: 8px 0 2px; }
+.grupo-orc { cursor: pointer; }
+.linha.tarefa .caixa { width: 24px; height: 24px; border-radius: 7px; border: 2px solid var(--borda); flex: none; display: inline-flex; align-items: center; justify-content: center; font-weight: 700; color: #fff; margin-right: 2px; }
+.linha.tarefa.feita .caixa { background: var(--acento); border-color: var(--acento); }
+.linha.tarefa.feita .titulo { text-decoration: line-through; color: var(--texto-3); }
+.linha.tarefa.vencida:not(.feita) .meta { color: var(--alerta); }
+.cartao.objetivo.atingido { border-left: 4px solid var(--ok); }
+.cartao.acordo.atrasado { border-left: 4px solid var(--alerta); }
+.cartao.acordo { cursor: pointer; }

@@ -409,3 +409,112 @@ test("sugestões: classes novas — imprevistos à parte, provisões e metas", (
   assert.ok(metas && metas.itens[0].rotulo === "Restaurante e delivery");
   assert.ok(r.sugestoes.some((s: any) => s.id === "provisoes"));
 });
+
+import { montarMetas, situacaoAcordos } from "../supabase/functions/api/lib/metas.ts";
+
+function dadosMetas(extra: any = {}) {
+  const mensal = (ini: string, n: number) => Array.from({ length: n }, (_, k) => {
+    const d = new Date(ini + "T12:00:00Z"); d.setUTCMonth(d.getUTCMonth() + k); return d.toISOString().slice(0, 10);
+  });
+  return {
+    hoje: "2026-11-10",
+    renda_plano: 7983.89,
+    receitas_mes: 7983.89,
+    grupos: [
+      { id: 1, nome: "Moradia", ordem: 10, categorias: [100, 101], observacao: null, itens: [
+        { id: 1, nome: "Aluguel", valor: 1500, periodicidade_meses: 1, tipo: "conta", dia_vencimento: 5, forma_pagamento: "Transferência", padrao: "GIOVANA PINHATTI", observacao: null },
+        { id: 2, nome: "Energia", valor: 250, periodicidade_meses: 1, tipo: "conta", dia_vencimento: null, forma_pagamento: null, padrao: "(DISTRIBUICAO DE ENERGIA|CEEE)", observacao: null },
+        { id: 3, nome: "Gás", valor: 110, periodicidade_meses: 3, tipo: "envelope", dia_vencimento: null, forma_pagamento: null, padrao: null, observacao: null },
+      ] },
+      { id: 2, nome: "Alimentação", ordem: 20, categorias: [1, 8], observacao: null, itens: [
+        { id: 4, nome: "Mercado + delivery", valor: 1600, periodicidade_meses: 1, tipo: "envelope", dia_vencimento: null, forma_pagamento: null, padrao: null, observacao: null },
+      ] },
+    ],
+    gastos_mes: [
+      { categoria_id: 100, categoria: "Aluguel", valor: 1500 },
+      { categoria_id: 1, categoria: "Mercado", valor: 900 },
+      { categoria_id: 8, categoria: "Restaurante e delivery", valor: 300 },
+      { categoria_id: 26, categoria: "Outros", valor: 450 },
+      { categoria_id: 50, categoria: "Pix para esposa (sem nota)", valor: 200 },
+    ],
+    pix_esposa_categoria_id: 50,
+    saidas_mes: [
+      { id: "a", data: "2026-11-05", valor: 1500, texto: "Transferência enviada Giovana Pinhatti Matos" },
+      { id: "e", data: "2026-11-08", valor: 999, texto: "Pagamento efetuado COMPANHIA ESTADUAL DE DISTRIBUICAO DE ENERGIA" },
+    ],
+    acordos: [
+      { id: 10, nome: "Acordo Itaú", credor: "Itaú", parcela_valor: 1273.96, parcelas_total: 60, parcelas_pagas: 2, saldo_devedor: null,
+        vencimentos: ["2026-09-28", ...mensal("2026-11-05", 59)], observacao: null },
+      { id: 11, nome: "Acordo Nubank", credor: "Nubank", parcela_valor: 374.59, parcelas_total: 24, parcelas_pagas: 1, saldo_devedor: null,
+        vencimentos: mensal("2026-10-21", 24), observacao: null },
+    ],
+    pagamentos: [
+      { divida_id: 10, data: "2026-09-28", valor: 1273.96 }, { divida_id: 10, data: "2026-11-05", valor: 1273.96 },
+      { divida_id: 11, data: "2026-10-21", valor: 374.59 },
+    ],
+    fluxo: [{ mes: "2026-10", sobra: 1100 }, { mes: "2026-11", sobra: 0 }],
+    colchao: 2500,
+    objetivos: [
+      { id: 1, grupo: "Agora", titulo: "Acordos em dia", descricao: null, tipo: "habito", fonte: "acordos_em_dia", valor_alvo: 12, valor_atual: null, inverso: false, data_alvo: null, concluido_em: null, ordem: 1 },
+      { id: 2, grupo: "Agora", titulo: "Colchão", descricao: null, tipo: "valor", fonte: "colchao", valor_alvo: 2889.69, valor_atual: null, inverso: false, data_alvo: "2026-10-31", concluido_em: null, ordem: 3 },
+      { id: 3, grupo: "Casa própria", titulo: "Renda na Faixa 4", descricao: null, tipo: "monitor", fonte: null, valor_alvo: 13000, valor_atual: 11330.47, inverso: true, data_alvo: null, concluido_em: null, ordem: 12 },
+      { id: 4, grupo: "Tarefas", titulo: "Registrato", descricao: null, tipo: "tarefa", fonte: null, valor_alvo: null, valor_atual: null, inverso: false, data_alvo: "2026-11-01", concluido_em: null, ordem: 25 },
+    ],
+    inicio_relogio: "2026-09-28",
+    ...extra,
+  };
+}
+
+test("metas: orçamento por grupo, fora do plano e resultado previsto do plano", () => {
+  const r = montarMetas(dadosMetas() as any);
+  const moradia = r.grupos.find((g: any) => g.nome === "Moradia")!;
+  assert.equal(moradia.meta, 1786.67);                 // 1500 + 250 + 110/3
+  assert.equal(moradia.gasto, 1500);
+  assert.equal(r.grupos.find((g: any) => g.nome === "Alimentação")!.gasto, 1200);
+  assert.deepEqual(r.fora_do_plano, [{ nome: "Outros", valor: 450 }]);
+  assert.equal(r.resultado.pix_esposa_sem_nota, 200);
+  // previsto = renda − metas − parcelas que vencem no mês (Itaú 05/11 + Nubank 21/11)
+  assert.equal(r.resultado.previsto, Math.round((7983.89 - 3386.67 - 1273.96 - 374.59) * 100) / 100);
+});
+
+test("metas: contas do mês reconhecidas no extrato e acordos", () => {
+  const r = montarMetas(dadosMetas() as any);
+  const st = Object.fromEntries(r.contas.map((c: any) => [c.nome, c.status]));
+  assert.equal(st["Aluguel"], "pago");
+  assert.equal(st["Energia"], "pendente", "valor muito diferente não conta como a conta de energia");
+  assert.equal(st["Acordo Itaú"], "pago");
+  assert.equal(st["Acordo Nubank"], "pendente");        // vence 21/11
+  assert.ok(!r.contas.some((c: any) => c.nome === "Gás"), "item trimestral não entra no checklist mensal");
+  const itau = r.acordos.find((a: any) => a.id === 10)!;
+  assert.equal(itau.em_dia, true);
+  assert.deepEqual(itau.proxima, { numero: 3, data: "2026-12-05" });
+  assert.equal(itau.saldo, Math.round(1273.96 * 58 * 100) / 100);
+});
+
+test("metas: atraso de acordo zera a sequência e objetivos calculam progresso", () => {
+  const ok = montarMetas(dadosMetas() as any);
+  const o = Object.fromEntries(ok.objetivos.map((x: any) => [x.titulo, x]));
+  assert.equal(o["Acordos em dia"].valor_atual, 1);       // 28/09 → 10/11
+  assert.equal(o["Colchão"].valor_atual, 2500);
+  assert.ok(o["Colchão"].progresso > 0.86 && o["Colchão"].progresso < 0.87);
+  assert.equal(o["Renda na Faixa 4"].atingido, true);
+  assert.equal(o["Registrato"].vencida, true);
+  // Nubank com parcela de 21/10 não paga → atrasado
+  const atrasado = montarMetas(dadosMetas({ pagamentos: [{ divida_id: 10, data: "2026-09-28", valor: 1273.96 }, { divida_id: 10, data: "2026-11-05", valor: 1273.96 }],
+    acordos: dadosMetas().acordos.map((a: any) => a.id === 11 ? { ...a, parcelas_pagas: 0 } : a) }) as any);
+  assert.equal(atrasado.atraso_acordo, true);
+  assert.equal(atrasado.objetivos.find((x: any) => x.fonte === "acordos_em_dia")!.valor_atual, 0);
+  assert.equal(atrasado.acordos.find((a: any) => a.id === 11)!.atrasadas, 1);
+});
+
+test("pagamentos de dívida: valor precisa bater com a parcela", () => {
+  const r = reconhecerPagamentos(
+    [{ id: 1, padrao_pagamento: "ITAU UNIBANCO", parcela_valor: 1273.96 }],
+    [
+      { id: "a", data: "2026-11-05", valor: 1273.96, descricao: "Transferência enviada|ITAU UNIBANCO S A" },
+      { id: "b", data: "2026-11-06", valor: 50, descricao: "Transferência enviada|ITAU UNIBANCO S A" },
+    ],
+    new Set(),
+  );
+  assert.deepEqual(r.map((x) => x.transacao_id), ["a"]);
+});

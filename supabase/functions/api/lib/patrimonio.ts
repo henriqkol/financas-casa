@@ -87,7 +87,7 @@ export function normalizarEmprestimo(l: any) {
   };
 }
 
-export interface DividaComPadrao { id: number; padrao_pagamento: string | null }
+export interface DividaComPadrao { id: number; padrao_pagamento: string | null; parcela_valor?: number | null }
 export interface TxParaPagamento { id: string; data: string; valor: number; descricao: string; recebedor_nome?: string | null }
 
 /** Lançamentos de saída cuja descrição contém o padrão de pagamento de alguma dívida. */
@@ -95,11 +95,12 @@ export function reconhecerPagamentos(dividas: DividaComPadrao[], txs: TxParaPaga
   const out: { divida_id: number; transacao_id: string; data: string; valor: number }[] = [];
   const padroes = dividas
     .filter((d) => d.padrao_pagamento && chaveAprendizado(d.padrao_pagamento).length >= 3)
-    .map((d) => ({ id: d.id, p: ` ${chaveAprendizado(d.padrao_pagamento)} ` }));
+    .map((d) => ({ id: d.id, p: ` ${chaveAprendizado(d.padrao_pagamento)} `, parcela: d.parcela_valor != null ? Number(d.parcela_valor) : null }));
   for (const t of txs) {
     if (jaUsadas.has(t.id)) continue;
     const texto = ` ${chaveAprendizado([t.descricao, t.recebedor_nome].filter(Boolean).join(" "))} `;
-    const d = padroes.find((x) => texto.includes(x.p));
+    // Com parcela definida, o valor precisa bater (±15%): evita confundir com outros pagamentos ao mesmo credor
+    const d = padroes.find((x) => texto.includes(x.p) && (x.parcela == null || Math.abs(t.valor - x.parcela) <= x.parcela * 0.15));
     if (d) {
       out.push({ divida_id: d.id, transacao_id: t.id, data: t.data, valor: t.valor });
       jaUsadas.add(t.id);

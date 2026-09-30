@@ -213,7 +213,7 @@ async function irPara(aba) {
   history.replaceState(null, "", `#${aba}`);
   abas.querySelectorAll("button").forEach((b) => b.classList.toggle("ativa", b.dataset.aba === aba));
   window.scrollTo(0, 0);
-  const tela = { inicio: telaInicio, gastos: telaGastos, escanear: telaEscanear, notas: telaNotas, mais: telaMais, patrimonio: telaPatrimonio, sugestoes: telaSugestoes }[aba] ?? telaInicio;
+  const tela = { inicio: telaInicio, gastos: telaGastos, escanear: telaEscanear, notas: telaNotas, mais: telaMais, patrimonio: telaPatrimonio, sugestoes: telaSugestoes, metas: telaMetas }[aba] ?? telaInicio;
   try { await tela(); } catch (e) {
     const semRede = /^Sem internet/.test(e.message);
     const alvo = $("#conteudo") ?? app;
@@ -285,7 +285,7 @@ async function telaInicio() {
     q(sb.from("v_dividas").select("saldo_devedor")).catch(() => []),
     todas(() => sb.from("v_receitas").select("categoria_id, categoria, valor").eq("mes", estado.mes)).catch(() => []),
     todas(() => sb.from("v_receitas").select("valor, data").eq("mes", ant)).catch(() => []),
-    q(sb.from("contas").select("id, nome, apelido, tipo, saldo, atualizado_em").eq("ativa", true).order("tipo").order("saldo", { ascending: false })).catch(() => []),
+    q(sb.from("contas").select("id, nome, apelido, tipo, saldo, atualizado_em, negativo_em_acordo").eq("ativa", true).order("tipo").order("saldo", { ascending: false })).catch(() => []),
   ]);
   const totalReceitas = receitas.reduce((s, r) => s + Number(r.valor), 0);
   const totalReceitasAnt = receitasAnt.reduce((s, r) => s + Number(r.valor), 0);
@@ -329,6 +329,9 @@ async function telaInicio() {
       ${total > 0 ? `<div class="compara">${Math.round((comNota / total) * 100)}% do valor tem nota fiscal detalhada</div>` : ""}
       ${totalReceitas > 0 ? `<div class="compara">Entrou ${Rp(totalReceitas)} · ${totalReceitas - total >= 0 ? `sobrou <span class="desce">${Rp(totalReceitas - total)}</span>` : `faltou <span class="sobe">${Rp(total - totalReceitas)}</span>`}</div>` : ""}
     </div>
+    <div class="cartao" id="cartaoMetas" data-acao="irMetas" style="cursor:pointer">
+      <h3>Metas do mês</h3><div class="nota-texto"><span class="spinner peq"></span> Carregando…</div>
+    </div>
     <div class="cartao" id="cartaoEvolucao">
       <h3>Evolução</h3>
       <div class="seg seg-peq">${PERIODOS_EVO.map(([k, n]) => `<button data-acao="periodoEvo" data-p="${k}">${n}</button>`).join("")}</div>
@@ -370,7 +373,7 @@ async function telaInicio() {
       <div class="linha" style="cursor:default;border-top:0;padding-top:0"><div class="corpo"><div class="titulo num ${saldoTotal < 0 ? "sobe" : ""}" style="font-size:20px">${Rp(Math.abs(saldoTotal), saldoTotal < 0 ? "−" : "")}</div>
         <div class="meta">Soma das contas correntes · atualizado ${haQuanto(bancos[0].atualizado_em)}</div></div></div>
       ${bancos.map((c) => `<div class="linha" style="cursor:default"><div class="corpo"><div class="titulo">${esc(c.apelido || c.nome)}</div>
-        ${Number(c.saldo) < 0 ? `<div class="meta"><span class="chip alerta">usando cheque especial</span></div>` : ""}</div>
+        ${Number(c.saldo) < 0 ? `<div class="meta"><span class="chip ${c.negativo_em_acordo ? "" : "alerta"}">${c.negativo_em_acordo ? "negativo em acordo" : "usando cheque especial"}</span></div>` : ""}</div>
         <div class="valor num ${Number(c.saldo) < 0 ? "sobe" : ""}">${Rp(Math.abs(Number(c.saldo)), Number(c.saldo) < 0 ? "−" : "")}</div></div>`).join("")}
       ${cartoes.map((c) => `<div class="linha" style="cursor:default"><div class="corpo"><div class="titulo">${esc(c.apelido || c.nome)}</div><div class="meta">fatura do cartão</div></div>
         <div class="valor num neutro">${Rp(Math.abs(Number(c.saldo)))}</div></div>`).join("")}
@@ -385,6 +388,7 @@ async function telaInicio() {
         <div class="meta">${sync ? `Atualizado ${haQuanto(sync.fim ?? sync.inicio)}${sync.ok === false ? ` · <span class="erro-texto">${esc(sync.mensagem ?? "erro")}</span>` : ""}` : "Ainda não sincronizado"}</div></div>
         <button class="botao peq sec" data-acao="sincronizar">Sincronizar</button></div>
     </div>`;
+  carregarResumoMetas();
   carregarEvolucao();
   carregarResumoSugestoes();
 }
@@ -1195,6 +1199,8 @@ async function telaMais() {
 
     <div class="cartao"><div class="linha" data-acao="irPatrimonio" data-s="investimentos"><div class="corpo"><div class="titulo">Patrimônio</div>
       <div class="meta">Investimentos, caixinhas e dívidas</div></div><span class="chip">abrir</span></div></div>
+    <div class="cartao"><div class="linha" data-acao="irMetas"><div class="corpo"><div class="titulo">Metas e plano financeiro</div>
+      <div class="meta">Orçamento do mês, contas do dia 5, acordos e objetivos</div></div><span class="chip">abrir</span></div></div>
     <div class="cartao"><div class="linha" data-acao="irSugestoes"><div class="corpo"><div class="titulo">Sugestões e plano</div>
       <div class="meta">Gasto ideal para a renda, onde economizar e como sair das dívidas</div></div><span class="chip">abrir</span></div></div>
 
@@ -1221,13 +1227,13 @@ async function telaMais() {
         : `<p class="nota-texto">As contas aparecem depois da primeira sincronização.</p>`}
     </div></details>
 
-    <details class="secao" id="secaoCategorias" ${estado.abrirCategorias ? "open" : ""}><summary>Categorias e metas</summary><div class="conteudo">
-      <p class="nota-texto" style="margin-top:0">Toque numa categoria para mudar nome, classe ou meta. Contas que vencem 1 vez por ano (seguro, IPVA) podem ter meta anual: o app divide por 12 e mostra quanto separar por mês.</p>
+    <details class="secao" id="secaoCategorias" ${estado.abrirCategorias ? "open" : ""}><summary>Categorias</summary><div class="conteudo">
+      <p class="nota-texto" style="margin-top:0">Toque numa categoria para mudar nome, grupo ou classe. As metas de valor ficam no orçamento, em Metas.</p>
       ${Object.entries(CLASSES).map(([k, rot]) => {
         const cs = estado.categorias.filter((c) => c.classe === k && c.ativa);
         return `<h3 style="margin:14px 0 4px">${rot}</h3><ul class="lista">${cs.map((c) => `<li class="linha" data-acao="editarCategoria" data-id="${c.id}">
           <div class="corpo"><div class="titulo"><span class="ponto" style="background:${esc(c.cor)}"></span> ${esc(c.nome)}</div>
-          <div class="meta">${esc(c.grupo)} · ${c.meta_valor ? `meta ${Rp(c.meta_valor)} ${PERIODOS[c.periodicidade_meses] ?? ""}` : k === "emergencial" ? "sem meta (forma a reserva)" : "sem meta"}</div></div>
+          <div class="meta">${esc(c.grupo)}${k === "emergencial" ? " · forma a reserva para imprevistos" : ""}</div></div>
           <span class="chip">editar</span></li>`).join("")}</ul>`;
       }).join("")}
       <h3 style="margin:14px 0 4px">Receitas e movimentos</h3>
@@ -1353,26 +1359,20 @@ acoes.editarCategoria = (el) => {
       <label class="campo" style="flex:0 0 52px"><span>Cor</span><input type="color" id="ecCor" value="${esc(c.cor)}" style="height:44px;width:52px;padding:2px;border-radius:10px;border:1px solid var(--borda)"></label>
     </div>
     <label class="campo"><span>Classe</span><select id="ecClasse">${Object.entries(CLASSES).map(([k, r]) => `<option value="${k}" ${c.classe === k ? "selected" : ""}>${r}</option>`).join("")}</select></label>
-    <div style="display:flex;gap:8px">
-      <label class="campo" style="flex:1"><span>Meta (R$)</span><input type="text" inputmode="decimal" id="ecMeta" value="${c.meta_valor ?? ""}" placeholder="sem meta"></label>
-      <label class="campo" style="flex:1"><span>Frequência</span><select id="ecPer">${Object.entries(PERIODOS).map(([k, r]) => `<option value="${k}" ${Number(c.periodicidade_meses ?? 1) === Number(k) ? "selected" : ""}>${r}</option>`).join("")}</select></label>
-    </div>
-    <p class="nota-texto">Emergenciais normalmente ficam sem meta: o quanto gastam por ano vira a meta da reserva para imprevistos.</p>
+    <p class="nota-texto">Emergenciais não têm meta: o quanto gastam por ano vira a meta da reserva para imprevistos.</p>
     <div class="botoes"><button class="botao cheio" data-acao="salvarCategoria" data-id="${c.id}">Salvar</button></div>
     <div class="botoes"><button class="botao peq sec" data-acao="arquivarCategoria" data-id="${c.id}">Ocultar categoria</button></div>`);
 };
 acoes.salvarCategoria = async (el) => {
   const nome = $("#ecNome").value.trim();
   if (!nome) return avisar("Dê um nome à categoria", true);
-  const meta = numeroDigitado($("#ecMeta").value);
   el.disabled = true;
   try {
     await q(sb.from("categorias").update({
       nome, grupo: $("#ecGrupo").value.trim() || "Outros", cor: $("#ecCor").value, classe: $("#ecClasse").value,
-      meta_valor: meta > 0 ? meta : null, periodicidade_meses: Number($("#ecPer").value),
     }).eq("id", Number(el.dataset.id)));
     await carregarCategorias();
-    cacheSugestoes = null;
+    cacheSugestoes = null; cacheMetas = null;
     avisar("Categoria salva");
     fecharFolha();
     estado.abrirCategorias = true;
@@ -1420,7 +1420,7 @@ acoes.sair = async () => { await apagarLocal(); try { localStorage.removeItem(CH
 
 // ------------------------------------------------------------------ PATRIMÔNIO
 // Investimentos (aplicações agrupadas em caixinhas) e dívidas.
-const TIPOS_DIVIDA = { emprestimo: "Empréstimo", financiamento: "Financiamento", cartao: "Cartão", cheque_especial: "Cheque especial", pessoa: "Pessoa", outro: "Outro" };
+const TIPOS_DIVIDA = { acordo: "Acordo", emprestimo: "Empréstimo", financiamento: "Financiamento", cartao: "Cartão", cheque_especial: "Cheque especial", pessoa: "Pessoa", outro: "Outro" };
 const CORES_CAIXINHA = ["#2e9e5b", "#3b7dd8", "#e5813b", "#8e6fd8", "#d64545", "#37a3a3", "#c96f9d", "#9a7b4f"];
 
 function variacaoTexto(v, base) {
@@ -1834,6 +1834,248 @@ acoes.ligarDivida = async (el) => {
   } catch (e) { avisar(e.message, true); el.disabled = false; }
 };
 
+// ------------------------------------------------------------------ METAS (plano financeiro)
+let cacheMetas = null;
+async function obterMetas(forcar = false) {
+  if (!forcar && cacheMetas && Date.now() - cacheMetas.em < 2 * 60000) return cacheMetas.dados;
+  const dados = await fn("/metas");
+  cacheMetas = { em: Date.now(), dados };
+  return dados;
+}
+const ICONE_STATUS = { pago: "✓", atrasado: "!", hoje: "•", pendente: "○" };
+const NOME_STATUS = { pago: "pago", atrasado: "atrasado", hoje: "vence hoje", pendente: "a pagar" };
+const sinal = (v) => (v < 0 ? "−" : "+");
+const mesAno = (d) => { const [a, m] = d.split("-"); return `${m}/${a}`; };
+
+async function telaMetas() {
+  const aba = estado.abaMetas ?? "mes";
+  app.innerHTML = `<div class="topo"><h1>Metas</h1>${botaoOlho()}</div>
+    <div class="seg">${[["mes", "Mês"], ["acordos", "Acordos"], ["objetivos", "Objetivos"]].map(([k, n]) =>
+      `<button class="${aba === k ? "ativo" : ""}" data-acao="abaMetas" data-s="${k}">${n}</button>`).join("")}</div>
+    <div id="conteudo">${carregando()}</div>`;
+  let d;
+  try { d = await obterMetas(true); }
+  catch (e) { $("#conteudo").innerHTML = `<div class="vazio"><strong>Não consegui carregar as metas</strong>${esc(e.message)}</div>`; return; }
+  estado.metas = d;
+  $("#conteudo").innerHTML = aba === "acordos" ? htmlAcordos(d) : aba === "objetivos" ? htmlObjetivos(d) : htmlMes(d);
+}
+acoes.abaMetas = (el) => { estado.abaMetas = el.dataset.s; recarregar(); };
+acoes.irMetas = (el) => { estado.abaMetas = el?.dataset?.s || estado.abaMetas || "mes"; irPara("metas"); };
+
+function linhaConta(c) {
+  const quando = c.status === "pago" ? `pago em ${dataCurta(c.pago_em).slice(0, 5)}` : c.data ? `${NOME_STATUS[c.status]} · dia ${Number(c.data.slice(8, 10))}` : "vencimento a definir";
+  return `<li class="linha conta-mes ${c.status}" ${c.tipo === "acordo" ? `data-acao="abrirDivida" data-id="${c.ref}"` : `data-acao="editarItemOrcamento" data-id="${c.ref}"`}>
+    <span class="status-conta ${c.status}">${ICONE_STATUS[c.status]}</span>
+    <div class="corpo"><div class="titulo">${esc(c.nome)}</div><div class="meta">${quando}${c.forma ? ` · ${esc(c.forma)}` : ""}</div></div>
+    <div class="valor num">${c.tipo === "acordo" ? Rp(c.valor) : R(c.valor)}</div></li>`;
+}
+
+function htmlMes(d) {
+  const r = d.resultado;
+  const pend = d.contas.filter((c) => c.status !== "pago");
+  const pagas = d.contas.filter((c) => c.status === "pago");
+  return `
+    <div class="cartao destaque">
+      <div class="nota-texto">Resultado previsto em ${nomeMes(d.mes)}</div>
+      <div class="valor num ${r.previsto < 0 ? "sobe" : "desce"}">${Rp(Math.abs(r.previsto), sinal(r.previsto))}</div>
+      <div class="compara">Renda ${Rp(r.renda_plano)} − orçamento ${R(r.metas_total)} − acordos ${Rp(r.acordos_mes)}</div>
+      <div class="compara">Até hoje: entrou ${Rp(r.receitas_real)} · gastos ${R(r.gasto_real)} · acordos pagos ${Rp(r.acordos_pagos)}</div>
+    </div>
+
+    <div class="cartao">
+      <h3>Contas do mês <span class="nota-texto" style="font-weight:400;text-transform:none;letter-spacing:0">· ${pagas.length} de ${d.contas.length} pagas</span></h3>
+      <ul class="lista">${pend.map(linhaConta).join("")}</ul>
+      ${pagas.length ? `<details class="pagas"><summary class="nota-texto">Já pagas (${pagas.length})</summary><ul class="lista">${pagas.map(linhaConta).join("")}</ul></details>` : ""}
+      <p class="nota-texto">O app marca como paga quando acha o pagamento no extrato (sincroniza 2x por dia). Toque numa conta para ajustar valor, dia ou o texto do extrato.</p>
+    </div>
+
+    <div class="cartao">
+      <h3>Orçamento</h3>
+      ${barraPlano("Total do mês", r.gasto_real, r.metas_total, "var(--acento)", false, false, "meta")}
+      ${d.grupos.map((g) => `<div class="grupo-orc" data-acao="abrirGrupoOrcamento" data-id="${g.id}">
+        ${barraPlano(esc(g.nome), g.gasto, g.meta, g.meta > 0 && g.gasto > g.meta ? "var(--alerta)" : "var(--acento)", false, false, "meta")}</div>`).join("")}
+      <p class="nota-texto">Gasto deste mês até hoje contra a meta mensal (contas trimestrais e anuais entram pelo valor por mês). Toque num grupo para ver e ajustar os itens.</p>
+    </div>
+
+    ${r.pix_esposa_sem_nota > 0 ? `<div class="cartao">
+      <h3>Pix para a Laynara sem nota</h3>
+      <div class="linha" style="cursor:default;border-top:0;padding-top:0"><div class="corpo"><div class="meta">Ainda não se sabe em qual grupo entra (mercado, ração, remédios…). Escaneie as notas: o valor passa para as categorias dos itens.</div></div><div class="valor num">${R(r.pix_esposa_sem_nota)}</div></div>
+      <div class="botoes" style="margin-top:4px"><button class="botao peq sec" data-acao="irEscanear">Escanear nota</button></div>
+    </div>` : ""}
+
+    ${d.fora_do_plano.length ? `<div class="cartao">
+      <h3>Fora do plano</h3>
+      <p class="nota-texto" style="margin-top:0">Gastos em categorias que não estão no orçamento: cada real aqui aumenta o déficit.</p>
+      <ul class="lista">${d.fora_do_plano.map((f) => `<li class="linha" data-acao="verCategoriaNome" data-nome="${esc(f.nome)}"><div class="corpo"><div class="titulo">${esc(f.nome)}</div></div><div class="valor num">${R(f.valor)}</div></li>`).join("")}</ul>
+    </div>` : ""}`;
+}
+
+function htmlAcordos(d) {
+  if (!d.acordos.length) return `<div class="vazio"><strong>Nenhum acordo cadastrado</strong>Cadastre em Patrimônio → Dívidas.</div>`;
+  const total = d.acordos.reduce((s, a) => s + a.parcela, 0);
+  const saldo = d.acordos.reduce((s, a) => s + a.saldo, 0);
+  return `
+    <div class="cartao destaque">
+      <div class="nota-texto">Acordos · ${d.atraso_acordo ? `<span class="sobe">há parcela atrasada</span>` : "todos em dia"}</div>
+      <div class="valor num">${Rp(total)}<span class="nota-texto" style="font-size:15px;font-weight:400"> por mês</span></div>
+      <div class="compara">Saldo a pagar ${Rp(saldo)}</div>
+    </div>
+    ${d.acordos.map((a) => `<div class="cartao acordo ${a.em_dia ? "" : "atrasado"}" data-acao="abrirDivida" data-id="${a.id}">
+      <div class="sug-topo"><span class="chip ${a.em_dia ? "ok" : "alerta"}">${a.em_dia ? "em dia" : `${a.atrasadas} atrasada${a.atrasadas > 1 ? "s" : ""}`}</span>
+        <span class="nota-texto" style="margin-left:auto">termina ${a.fim ? mesAno(a.fim) : "—"}</span></div>
+      <h2 style="margin:8px 0 2px">${esc(a.nome)}</h2>
+      <div class="plano-rotulo"><span class="nota-texto">${a.pagas} de ${a.total} parcelas de ${Rp(a.parcela)}</span><span class="num">${Rp(a.saldo)}</span></div>
+      <div class="plano-trilho"><i style="width:${(a.pagas / a.total) * 100}%;background:var(--acento)"></i></div>
+      <p class="nota-texto" style="margin:8px 0 0">${a.proxima ? `${a.proxima.data < d.hoje ? `<span class="sobe">Em atraso</span>: parcela ${a.proxima.numero}, vencida em` : `Próxima: parcela ${a.proxima.numero} em`} <strong>${dataCurta(a.proxima.data)}</strong>` : "Todas as parcelas pagas"}${a.observacao ? ` · ${esc(a.observacao)}` : ""}</p>
+    </div>`).join("")}
+    <p class="nota-texto">Pagamentos são reconhecidos no extrato pelo texto e pelo valor da parcela. Se algum não for reconhecido, toque no acordo e registre o pagamento.</p>`;
+}
+
+function htmlObjetivos(d) {
+  const grupos = {};
+  for (const o of d.objetivos) (grupos[o.grupo] ??= []).push(o);
+  const fmtValor = (o, v) => (o.tipo === "habito" ? `${v ?? 0} ${o.fonte === "acordos_em_dia" ? "meses" : "meses no azul"}` : Rp(v ?? 0));
+  const cartaoObj = (o) => {
+    if (o.tipo === "tarefa") {
+      return `<li class="linha tarefa ${o.concluido_em ? "feita" : ""} ${o.vencida ? "vencida" : ""}" data-acao="alternarTarefa" data-id="${o.id}">
+        <span class="caixa">${o.concluido_em ? "✓" : ""}</span>
+        <div class="corpo"><div class="titulo">${esc(o.titulo)}</div>${o.descricao || o.data_alvo ? `<div class="meta">${o.data_alvo ? `${o.vencida ? "atrasada · " : ""}até ${dataCurta(o.data_alvo)}` : ""}${o.data_alvo && o.descricao ? " · " : ""}${esc(o.descricao ?? "")}</div>` : ""}</div></li>`;
+    }
+    const manual = !o.fonte;
+    return `<div class="cartao objetivo ${o.atingido ? "atingido" : ""}">
+      <div class="sug-topo"><span class="chip ${o.atingido ? "ok" : ""}">${o.atingido ? "atingido" : o.tipo === "habito" ? "hábito" : o.tipo === "monitor" ? "acompanhar" : "meta"}</span>
+        ${o.data_alvo ? `<span class="nota-texto" style="margin-left:auto">até ${dataCurta(o.data_alvo)}</span>` : ""}</div>
+      <h2 style="margin:8px 0 4px">${esc(o.titulo)}</h2>
+      <div class="plano-rotulo"><span class="num"><strong>${fmtValor(o, o.valor_atual)}</strong> <span class="nota-texto">${o.inverso ? "limite" : "de"} ${fmtValor(o, o.valor_alvo)}</span></span><span class="nota-texto">${Math.round(o.progresso * 100)}%</span></div>
+      <div class="plano-trilho"><i style="width:${Math.min(o.progresso, 1) * 100}%;background:${o.inverso ? (o.atingido ? "var(--acento)" : "var(--alerta)") : "var(--acento)"}"></i></div>
+      ${o.detalhe ? `<p class="nota-texto" style="margin:8px 0 0">${privTexto(esc(o.detalhe))}</p>` : ""}
+      ${o.descricao ? `<p class="nota-texto" style="margin:6px 0 0">${privTexto(esc(o.descricao))}</p>` : ""}
+      ${manual ? `<div class="botoes"><button class="botao peq sec" data-acao="atualizarObjetivo" data-id="${o.id}">Atualizar valor</button></div>` : ""}
+    </div>`;
+  };
+  return Object.entries(grupos).map(([g, os]) => `<h3 style="margin:18px 2px 8px">${esc(g)}</h3>${
+    g === "Tarefas" ? `<div class="cartao" style="padding:2px 14px"><ul class="lista">${os.sort((a, b) => (!!a.concluido_em - !!b.concluido_em) || String(a.data_alvo ?? "9").localeCompare(String(b.data_alvo ?? "9"))).map(cartaoObj).join("")}</ul></div>`
+      : os.map(cartaoObj).join("")}`).join("")
+    + `<p class="nota-texto">Colchão, acordos em dia e déficit se atualizam sozinhos pelo extrato. Os outros você atualiza quando tiver o número (ex.: saldo do FGTS no app).</p>`;
+}
+
+// ---------- Ações
+acoes.irEscanear = () => irPara("escanear");
+acoes.verCategoriaNome = (el) => {
+  const c = estado.categorias.find((x) => x.nome === el.dataset.nome);
+  estado.categoriaFiltro = c ? c.id : "nula"; estado.filtroGastos = "tudo"; irPara("gastos");
+};
+acoes.alternarTarefa = async (el) => {
+  const o = estado.metas?.objetivos.find((x) => x.id === Number(el.dataset.id));
+  if (!o) return;
+  try {
+    await q(sb.from("objetivos").update({ concluido_em: o.concluido_em ? null : new Date().toISOString(), atualizado_em: new Date().toISOString() }).eq("id", o.id));
+    cacheMetas = null; recarregar();
+  } catch (e) { avisar(e.message, true); }
+};
+acoes.atualizarObjetivo = (el) => {
+  const o = estado.metas?.objetivos.find((x) => x.id === Number(el.dataset.id));
+  if (!o) return;
+  abrirFolha(`<h2>${esc(o.titulo)}</h2>
+    <label class="campo"><span>Valor atual (R$)</span><input type="text" inputmode="decimal" id="objAtual" value="${o.valor_atual ?? ""}"></label>
+    <div style="display:flex;gap:8px">
+      <label class="campo" style="flex:1"><span>${o.inverso ? "Limite" : "Meta"} (R$)</span><input type="text" inputmode="decimal" id="objAlvo" value="${o.valor_alvo ?? ""}"></label>
+      <label class="campo" style="flex:1"><span>Até</span><input type="date" id="objData" value="${o.data_alvo ?? ""}"></label>
+    </div>
+    <div class="botoes"><button class="botao cheio" data-acao="salvarObjetivo" data-id="${o.id}">Salvar</button></div>`);
+};
+acoes.salvarObjetivo = async (el) => {
+  el.disabled = true;
+  try {
+    const atual = numeroDigitado($("#objAtual").value), alvo = numeroDigitado($("#objAlvo").value);
+    await q(sb.from("objetivos").update({
+      valor_atual: Number.isFinite(atual) ? atual : null, valor_alvo: Number.isFinite(alvo) && alvo > 0 ? alvo : null,
+      data_alvo: $("#objData").value || null, atualizado_em: new Date().toISOString(),
+    }).eq("id", Number(el.dataset.id)));
+    cacheMetas = null; fecharFolha(); avisar("Objetivo atualizado"); recarregar();
+  } catch (e) { avisar(e.message, true); el.disabled = false; }
+};
+acoes.abrirGrupoOrcamento = (el) => {
+  const g = estado.metas?.grupos.find((x) => x.id === Number(el.dataset.id));
+  if (!g) return;
+  abrirFolha(`<h2>${esc(g.nome)}</h2>
+    <p class="nota-texto" style="margin-top:0">${R(g.gasto)} gastos este mês · meta ${R(g.meta)}${g.observacao ? ` · ${esc(g.observacao)}` : ""}</p>
+    <ul class="lista">${g.itens.map((i) => `<li class="linha" data-acao="editarItemOrcamento" data-id="${i.id}">
+      <div class="corpo"><div class="titulo">${esc(i.nome)}</div><div class="meta">${i.tipo === "conta" ? "conta" : "separar"} · ${PERIODOS[i.periodicidade_meses] ?? ""}${i.periodicidade_meses > 1 ? ` (${R(i.meta_mensal)}/mês)` : ""}${i.dia_vencimento ? ` · dia ${i.dia_vencimento}` : ""}</div></div>
+      <div class="valor num">${R(i.valor)}</div></li>`).join("")}</ul>
+    <div class="botoes"><button class="botao peq sec" data-acao="novoItemOrcamento" data-grupo="${g.id}">+ Item</button></div>`);
+};
+function formItemOrcamento(i, grupoId) {
+  return `<h2>${i ? esc(i.nome) : "Novo item"}</h2>
+    <label class="campo"><span>Nome</span><input type="text" id="oiNome" value="${esc(i?.nome ?? "")}"></label>
+    <div style="display:flex;gap:8px">
+      <label class="campo" style="flex:1"><span>Valor (R$)</span><input type="text" inputmode="decimal" id="oiValor" value="${i?.valor ?? ""}"></label>
+      <label class="campo" style="flex:1"><span>Frequência</span><select id="oiPer">${Object.entries(PERIODOS).map(([k, r]) => `<option value="${k}" ${Number(i?.periodicidade_meses ?? 1) === Number(k) ? "selected" : ""}>${r}</option>`).join("")}</select></label>
+    </div>
+    <div style="display:flex;gap:8px">
+      <label class="campo" style="flex:1"><span>Tipo</span><select id="oiTipo"><option value="envelope" ${i?.tipo !== "conta" ? "selected" : ""}>Separar (envelope)</option><option value="conta" ${i?.tipo === "conta" ? "selected" : ""}>Conta a pagar</option></select></label>
+      <label class="campo" style="flex:0 0 90px"><span>Dia</span><input type="text" inputmode="numeric" id="oiDia" value="${i?.dia_vencimento ?? ""}" placeholder="—"></label>
+    </div>
+    <label class="campo"><span>Forma de pagamento</span><input type="text" id="oiForma" value="${esc(i?.forma_pagamento ?? "")}"></label>
+    <label class="campo"><span>Texto no extrato (para marcar como paga)</span><input type="text" id="oiPadrao" value="${esc(i?.padrao ?? "")}" placeholder="Ex.: PETLOVE"></label>
+    <div class="botoes"><button class="botao cheio" data-acao="salvarItemOrcamento" data-id="${i?.id ?? ""}" data-grupo="${grupoId ?? i?.grupo_id ?? ""}">Salvar</button></div>
+    ${i ? `<div class="botoes"><button class="botao peq sec" data-acao="removerItemOrcamento" data-id="${i.id}">Remover item</button></div>` : ""}`;
+}
+acoes.editarItemOrcamento = (el) => {
+  const i = estado.metas?.grupos.flatMap((g) => g.itens.map((x) => ({ ...x, grupo_id: g.id }))).find((x) => x.id === Number(el.dataset.id));
+  if (i) abrirFolha(formItemOrcamento(i));
+};
+acoes.novoItemOrcamento = (el) => abrirFolha(formItemOrcamento(null, Number(el.dataset.grupo)));
+acoes.salvarItemOrcamento = async (el) => {
+  const nome = $("#oiNome").value.trim();
+  const valor = numeroDigitado($("#oiValor").value);
+  if (!nome || !(valor >= 0)) return avisar("Preencha nome e valor", true);
+  const dia = parseInt($("#oiDia").value, 10);
+  const padrao = normalizar($("#oiPadrao").value.trim());
+  const dados = {
+    nome, valor, periodicidade_meses: Number($("#oiPer").value), tipo: $("#oiTipo").value,
+    dia_vencimento: dia >= 1 && dia <= 31 ? dia : null, forma_pagamento: $("#oiForma").value.trim() || null, padrao: padrao || null,
+  };
+  el.disabled = true;
+  try {
+    if (el.dataset.id) await q(sb.from("orcamento_itens").update(dados).eq("id", Number(el.dataset.id)));
+    else await q(sb.from("orcamento_itens").insert({ ...dados, grupo_id: Number(el.dataset.grupo), ordem: 90 }));
+    cacheMetas = null; cacheSugestoes = null; fecharFolha(); avisar("Orçamento atualizado"); recarregar();
+  } catch (e) { avisar(e.message, true); el.disabled = false; }
+};
+acoes.removerItemOrcamento = async (el) => {
+  try {
+    await q(sb.from("orcamento_itens").update({ ativo: false }).eq("id", Number(el.dataset.id)));
+    cacheMetas = null; fecharFolha(); avisar("Item removido"); recarregar();
+  } catch (e) { avisar(e.message, true); }
+};
+
+/** Resumo das metas no Início. */
+async function carregarResumoMetas() {
+  const el = $("#cartaoMetas");
+  if (!el) return;
+  try {
+    const d = await obterMetas();
+    if (!$("#cartaoMetas")) return;
+    estado.metas = d;
+    const r = d.resultado;
+    const pend = d.contas.filter((c) => c.status !== "pago");
+    const atrasadas = d.contas.filter((c) => c.status === "atrasado");
+    const prox = pend.filter((c) => c.data).sort((a, b) => a.data.localeCompare(b.data))[0];
+    const tarefas = d.objetivos.filter((o) => o.tipo === "tarefa" && !o.concluido_em && o.data_alvo && o.data_alvo <= somarDiasISO(d.hoje, 7));
+    el.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">Metas do mês</h3><span class="chip">abrir ›</span></div>
+      <div class="plano-rotulo" style="margin-top:8px"><span>Resultado previsto</span><span class="num"><strong class="${r.previsto < 0 ? "sobe" : "desce"}">${Rp(Math.abs(r.previsto), sinal(r.previsto))}</strong></span></div>
+      ${barraPlano("Orçamento usado", r.gasto_real, r.metas_total, r.gasto_real > r.metas_total ? "var(--alerta)" : "var(--acento)", false, false, "meta")}
+      <ul class="lista">
+        ${atrasadas.length ? `<li class="linha"><span class="status-conta atrasado">!</span><div class="corpo"><div class="titulo">${atrasadas.length} conta${atrasadas.length > 1 ? "s" : ""} atrasada${atrasadas.length > 1 ? "s" : ""}</div><div class="meta">${atrasadas.map((c) => esc(c.nome)).join(", ")}</div></div></li>` : ""}
+        <li class="linha"><span class="status-conta ${pend.length ? "pendente" : "pago"}">${pend.length ? "○" : "✓"}</span><div class="corpo"><div class="titulo">${pend.length ? `${pend.length} conta${pend.length > 1 ? "s" : ""} a pagar` : "Todas as contas do mês pagas"}</div>${prox ? `<div class="meta">próxima: ${esc(prox.nome)} · ${dataCurta(prox.data).slice(0, 5)}</div>` : ""}</div></li>
+        ${tarefas.length ? `<li class="linha"><span class="status-conta hoje">•</span><div class="corpo"><div class="titulo">${tarefas.length} tarefa${tarefas.length > 1 ? "s" : ""} para esta semana</div><div class="meta">${esc(tarefas[0].titulo)}</div></div></li>` : ""}
+      </ul>`;
+  } catch (e) {
+    el.innerHTML = `<h3>Metas do mês</h3><p class="nota-texto">Não consegui carregar (${esc(e.message)}).</p>`;
+  }
+}
+function somarDiasISO(dia, n) { const d = new Date(dia + "T12:00:00"); d.setDate(d.getDate() + n); return isoDia(d); }
 // ------------------------------------------------------------------ SUGESTÕES E PLANO
 const ICONES_SUG = { alerta: "!", economia: "$", divida: "↓", meta: "◎", dica: "i" };
 const NOMES_TIPO_SUG = { alerta: "Alerta", economia: "Economia", divida: "Dívida", meta: "Meta", dica: "Dica" };
@@ -1895,11 +2137,8 @@ async function telaSugestoes() {
       </ul>
     </div>
 
-    ${d.metas?.length ? `<div class="cartao">
-      <h3>Metas do mês</h3>
-      ${d.metas.map((m) => barraPlano(esc(m.categoria) + (m.periodicidade_meses > 1 ? ` <span class="nota-texto">(provisão)</span>` : ""), m.periodicidade_meses > 1 ? m.media : m.atual, m.meta_mensal, CORES_CLASSE[m.classe] ?? "var(--acento)", false, true, "meta")).join("")}
-      <p class="nota-texto">Gasto deste mês até hoje contra a meta mensal. Contas anuais mostram a média mensal contra a provisão. Ajuste as metas em Mais → Categorias e metas.</p>
-    </div>` : `<div class="cartao"><h3>Metas do mês</h3><p class="nota-texto" style="margin:0">Nenhuma meta ainda. Defina em <a href="#" data-acao="irCategorias">Mais → Categorias e metas</a>.</p></div>`}
+    <div class="cartao" data-acao="irMetas" style="cursor:pointer"><div class="linha" style="cursor:inherit;border-top:0;padding-top:0"><div class="corpo"><div class="titulo">Metas do mês</div>
+      <div class="meta">Orçamento por grupo, contas do dia 5, acordos e objetivos</div></div><span class="chip">abrir ›</span></div></div>
 
     ${d.dividas.ordem.length ? `<div class="cartao" data-acao="irPatrimonio" data-s="dividas" style="cursor:pointer">
       <h3>Dívidas</h3>
@@ -2098,7 +2337,7 @@ async function iniciar() {
   await carregarCategorias();
   abas.hidden = false;
   const inicial = location.hash.replace("#", "");
-  await irPara(["inicio", "gastos", "escanear", "notas", "mais", "patrimonio", "sugestoes"].includes(inicial) ? inicial : "inicio");
+  await irPara(["inicio", "gastos", "escanear", "notas", "mais", "patrimonio", "sugestoes", "metas"].includes(inicial) ? inicial : "inicio");
   processarFila();
 }
 iniciar();

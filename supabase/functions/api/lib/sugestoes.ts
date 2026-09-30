@@ -9,14 +9,14 @@ export interface DadosSugestoes {
   pagamentosDivida: { mes: string; valor: number }[];
   juros: { mes: string; tipo: string; valor: number }[];   // tipo: cheque_especial | atraso | cartao | iof | tarifas | outros
   recorrentes: { descricao: string; categoria: string | null; valor_medio: number; meses: number }[];
-  contas: { nome: string; tipo: string; saldo: number }[];
+  contas: { nome: string; tipo: string; saldo: number; em_acordo?: boolean }[];
   dividas: { nome: string; tipo: string; saldo: number; taxa_mensal: number | null; parcela: number | null; origem: string }[];
   cartao: { fatura: number; parcelas_futuras: number };
   investido: number;
   repasse: { total: number; com_nota: number };
   prefs: { renda_mensal: number | null; meta_poupanca_pct: number; reserva_meses: number };
   /** Categorias com meta (meta_mensal = meta_valor ÷ periodicidade). */
-  metas?: { categoria: string; classe: string | null; meta_mensal: number; periodicidade_meses: number }[];
+  metas?: { categoria: string; classe: string | null; meta_mensal: number; periodicidade_meses: number; categorias?: string[] }[];
   cdi_anual: number;
   pendencias: { notas: number; sem_categoria: number };
   ufs_notas: string[];
@@ -55,6 +55,7 @@ export function taxaEstimada(tipo: string, taxa: number | null): { taxa: number;
   if (tipo === "emprestimo") return { taxa: 4, estimada: true };
   if (tipo === "financiamento") return { taxa: 1.5, estimada: true };
   if (tipo === "pessoa") return { taxa: 0, estimada: true };
+  if (tipo === "acordo") return { taxa: 0, estimada: true };             // parcela fixa já negociada
   return { taxa: 3, estimada: true };
 }
 
@@ -104,7 +105,7 @@ export function gerarDiagnostico(d: DadosSugestoes) {
   const imprevistosAno = arred((soma12((g) => g.classe === "emergencial") / meses12) * 12);
   const VIAGENS = ["Viagem para visitar", "Turismo"];
   const viagensAno = arred((soma12((g) => VIAGENS.includes(g.categoria)) / meses12) * 12);
-  const anuais = (d.metas ?? []).filter((m) => m.periodicidade_meses > 1);
+  const anuais = (d.metas ?? []).filter((m) => m.periodicidade_meses > 1);   // itens do orçamento que não vencem todo mês
   const plano = {
     renda, origem_renda: origemRenda, meses: mesesComDados,
     gasto_ideal: arred(renda * (1 - poupPct)),
@@ -128,7 +129,7 @@ export function gerarDiagnostico(d: DadosSugestoes) {
   const cdiMensalLiq = cdiMensal * 0.825; // IR médio ~17,5%
 
   // ---------- Dívidas: cheque especial primeiro
-  const negativas = d.contas.filter((c) => c.tipo === "BANK" && c.saldo < 0);
+  const negativas = d.contas.filter((c) => c.tipo === "BANK" && c.saldo < 0 && !c.em_acordo);
   const positivas = d.contas.filter((c) => c.tipo === "BANK" && c.saldo > 0).sort((a, b) => b.saldo - a.saldo);
   const jurosPorTipo = (tipo: string) => mediaRef(d.juros, (j) => j.tipo === tipo);
   const jurosChequeMes = jurosPorTipo("cheque_especial");
@@ -213,9 +214,10 @@ export function gerarDiagnostico(d: DadosSugestoes) {
 
   // ---------- Metas por categoria
   const metas = (d.metas ?? []).map((m) => {
-    const c = porCategoria.get(m.categoria);
+    // Uma meta pode cobrir várias categorias (grupo do orçamento)
+    const cs = (m.categorias ?? [m.categoria]).map((n) => porCategoria.get(n)).filter(Boolean) as { media: number; atual: number }[];
     return { categoria: m.categoria, classe: m.classe, meta_mensal: arred(m.meta_mensal), periodicidade_meses: m.periodicidade_meses,
-      media: arred(c?.media ?? 0), atual: arred(c?.atual ?? 0) };
+      media: arred(cs.reduce((s, c) => s + c.media, 0)), atual: arred(cs.reduce((s, c) => s + c.atual, 0)) };
   }).sort((a, b) => (b.atual / (b.meta_mensal || 1)) - (a.atual / (a.meta_mensal || 1)));
   const estouradas = metas.filter((m) => m.periodicidade_meses === 1 && m.meta_mensal > 0 && m.media > m.meta_mensal * 1.05);
   if (estouradas.length) {
