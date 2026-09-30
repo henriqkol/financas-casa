@@ -740,6 +740,7 @@ async function dadosEMetas() {
     colchao,
     objetivos: (objetivos as any[]).map((o) => ({ ...o, valor_alvo: o.valor_alvo != null ? Number(o.valor_alvo) : null, valor_atual: o.valor_atual != null ? Number(o.valor_atual) : null })),
     inicio_relogio: p.acordos_ultimo_atraso ?? "2026-09-28",
+    inicio_plano: p.plano_inicio ?? "2026-10-01",
   });
   // Atraso quebra a sequência de meses em dia: o relógio recomeça a partir de hoje
   if (r.atraso_acordo && p.acordos_ultimo_atraso !== hoje) {

@@ -1863,7 +1863,7 @@ acoes.abaMetas = (el) => { estado.abaMetas = el.dataset.s; recarregar(); };
 acoes.irMetas = (el) => { estado.abaMetas = el?.dataset?.s || estado.abaMetas || "mes"; irPara("metas"); };
 
 function linhaConta(c) {
-  const quando = c.status === "pago" ? `pago em ${dataCurta(c.pago_em).slice(0, 5)}` : c.data ? `${NOME_STATUS[c.status]} · dia ${Number(c.data.slice(8, 10))}` : "vencimento a definir";
+  const quando = c.status === "pago" ? (c.pago_em ? `pago em ${dataCurta(c.pago_em).slice(0, 5)}` : "pago") : c.data ? `${NOME_STATUS[c.status]} · dia ${Number(c.data.slice(8, 10))}` : "vencimento a definir";
   return `<li class="linha conta-mes ${c.status}" ${c.tipo === "acordo" ? `data-acao="abrirDivida" data-id="${c.ref}"` : `data-acao="editarItemOrcamento" data-id="${c.ref}"`}>
     <span class="status-conta ${c.status}">${ICONE_STATUS[c.status]}</span>
     <div class="corpo"><div class="titulo">${esc(c.nome)}</div><div class="meta">${quando}${c.forma ? ` · ${esc(c.forma)}` : ""}</div></div>

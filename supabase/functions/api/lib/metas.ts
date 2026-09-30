@@ -29,6 +29,7 @@ export interface DadosMetas {
   colchao: number;
   objetivos: Objetivo[];
   inicio_relogio: string;                                         // último atraso ou 28/09/2026
+  inicio_plano?: string;                                          // antes disso, conta não paga não é "atrasada"
 }
 
 const arred = (v: number) => Math.round(v * 100) / 100;
@@ -93,9 +94,10 @@ export function montarMetas(d: DadosMetas) {
     const achado = re ? d.saidas_mes.find((t) => !usadas.has(t.id) && re!.test(normalizar(t.texto)) && Math.abs(t.valor - i.valor) <= Math.max(i.valor * 0.3, 10)) : undefined;
     if (achado) usadas.add(achado.id);
     const data = i.dia_vencimento ? `${mes}-${String(Math.min(i.dia_vencimento, 28)).padStart(2, "0")}` : null;
+    const antesDoPlano = !!d.inicio_plano && mes < mesDe(d.inicio_plano);
     contas.push({
       tipo: "conta", nome: i.nome, valor: i.valor, dia: i.dia_vencimento, data,
-      status: achado ? "pago" : data && data < d.hoje ? "atrasado" : data === d.hoje ? "hoje" : "pendente",
+      status: achado ? "pago" : data && data < d.hoje && !antesDoPlano ? "atrasado" : data === d.hoje ? "hoje" : "pendente",
       pago_em: achado?.data ?? null, forma: i.forma_pagamento, ref: i.id,
     });
   }
@@ -103,12 +105,16 @@ export function montarMetas(d: DadosMetas) {
     const venc = (a.vencimentos ?? []).filter((v) => mesDe(v) === mes);
     if (!venc.length) continue;
     const v = venc[0];
-    const pago = d.pagamentos.find((p) => p.divida_id === a.id && p.data >= addDias(v, -25) && p.data <= addDias(v, 20));
+    const numero = (a.vencimentos ?? []).indexOf(v) + 1;
+    // Paga se a parcela deste mês já está entre as pagas (inclui as pagas antes do cadastro) ou se há pagamento perto do vencimento
+    const pagoAntes = numero > 0 && numero <= a.parcelas_pagas;
+    const pagamento = d.pagamentos.find((p) => p.divida_id === a.id && p.data >= addDias(v, -25) && p.data <= addDias(v, 20));
+    const pago = pagamento ?? (pagoAntes ? { data: null as string | null } : undefined);
     const s = acordos.find((x) => x.id === a.id)!;
     contas.push({
       tipo: "acordo", nome: a.nome, valor: a.parcela_valor, dia: Number(v.slice(8, 10)), data: v,
       status: pago ? "pago" : v < d.hoje ? "atrasado" : v === d.hoje ? "hoje" : "pendente",
-      pago_em: pago?.data ?? null, forma: s.proxima ? `parcela ${Math.min(s.pagas + (pago ? 0 : 1), s.total)}/${s.total}` : null, ref: a.id,
+      pago_em: pago?.data ?? null, forma: `parcela ${numero}/${s.total}`, ref: a.id,
     });
   }
   const ordemStatus = { atrasado: 0, hoje: 1, pendente: 2, pago: 3 };

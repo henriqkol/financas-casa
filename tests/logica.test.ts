@@ -518,3 +518,14 @@ test("pagamentos de dívida: valor precisa bater com a parcela", () => {
   );
   assert.deepEqual(r.map((x) => x.transacao_id), ["a"]);
 });
+
+test("metas: parcela paga antes do cadastro e contas antes do início do plano", () => {
+  const base: any = dadosMetas({ hoje: "2026-09-30", inicio_plano: "2026-10-01",
+    acordos: [{ id: 12, nome: "Acordo Laynara", credor: "Nubank", parcela_valor: 119.08, parcelas_total: 25, parcelas_pagas: 1, saldo_devedor: null,
+      vencimentos: ["2026-09-28", "2026-11-06"], observacao: null }],
+    pagamentos: [], saidas_mes: [] });
+  const r = montarMetas(base);
+  const st = Object.fromEntries(r.contas.map((c: any) => [c.nome, c.status]));
+  assert.equal(st["Acordo Laynara"], "pago");
+  assert.equal(st["Aluguel"], "pendente", "antes do início do plano não marca atraso");
+});
