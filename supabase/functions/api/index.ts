@@ -726,7 +726,7 @@ async function dadosEMetas() {
     ok(await db.from("orcamento_itens").select("*").eq("ativo", true).order("ordem")),
     todos((de, ate) => db.from("v_gastos").select("categoria_id, categoria, valor").eq("mes", mes).eq("conta_como_gasto", true).range(de, ate)),
     ok(await db.from("categorias").select("id").eq("nome", "Pix para esposa (sem nota)").maybeSingle()),
-    todos((de, ate) => db.from("transacoes").select("id, data, valor, descricao, recebedor_nome, recebedor_ispb, observacao").eq("sentido", "saida").eq("removida", false)
+    todos((de, ate) => db.from("transacoes").select("id, data, valor, descricao, recebedor_nome, recebedor_ispb, observacao, categorias(nome)").eq("sentido", "saida").eq("removida", false)
       .gte("data", `${mes}-01`).lte("data", hoje).range(de, ate)),
     ok(await db.from("dividas").select("id, nome, credor, parcela_valor, parcelas_total, parcelas_pagas, saldo_devedor, vencimentos, observacao").eq("tipo", "acordo").eq("ativa", true).order("id")),
     ok(await db.from("v_fluxo_mensal").select("mes, sobra").gte("mes", "2026-10")),
@@ -748,7 +748,8 @@ async function dadosEMetas() {
     // a observação escrita no app também vale (ex.: Pix sem nome do recebedor → "Telefonica")
     // + nome da carteira de destino (ex.: Pix para a própria conta PicPay vira "... PICPAY")
     saidas_mes: (saidas as any[]).map((t) => ({ id: t.id, data: t.data, valor: Number(t.valor),
-      texto: [textoTx(t), t.observacao, cart.find((c) => c.ispb === t.recebedor_ispb)?.nome].filter(Boolean).join(" ") })),
+      // e o nome da categoria (o texto do item pode ser "ASSINATURAS")
+      texto: [textoTx(t), t.observacao, cart.find((c) => c.ispb === t.recebedor_ispb)?.nome, t.categorias?.nome].filter(Boolean).join(" ") })),
     acordos: (acordos as any[]).map((a) => ({ ...a, parcela_valor: Number(a.parcela_valor), saldo_devedor: a.saldo_devedor != null ? Number(a.saldo_devedor) : null, vencimentos: a.vencimentos ?? [] })),
     pagamentos: pagamentos.map((x) => ({ ...x, valor: Number(x.valor) })),
     fluxo: (fluxo as any[]).map((f) => ({ mes: f.mes, sobra: Number(f.sobra) })),

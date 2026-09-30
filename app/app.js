@@ -2095,7 +2095,7 @@ function formItemOrcamento(i, grupoId) {
     </div>
     <label class="campo"><span>Forma de pagamento</span><input type="text" id="oiForma" value="${esc(i?.forma_pagamento ?? "")}"></label>
     <label class="campo"><span>Texto no extrato (para marcar como paga)</span><input type="text" id="oiPadrao" value="${esc(i?.padrao ?? "")}" placeholder="Ex.: PETLOVE"></label>
-    <p class="nota-texto" style="margin-top:-6px">Um nome que aparece no extrato. Para mais de um, separe com | (ex.: <code>BONIFACIO|IVAN KOLLING</code>). Se forem vários Pix no mês, o app soma todos.</p>
+    <p class="nota-texto" style="margin-top:-6px">Um nome que aparece no extrato, a observação do lançamento ou o nome da categoria (ex.: <code>ASSINATURAS</code>). Para mais de um, separe com | (ex.: <code>BONIFACIO|IVAN KOLLING</code>). Se forem vários pagamentos no mês, o app soma todos.</p>
     <div class="botoes"><button class="botao cheio" data-acao="salvarItemOrcamento" data-id="${i?.id ?? ""}" data-grupo="${grupoId ?? i?.grupo_id ?? ""}">Salvar</button></div>
     ${i ? `<div class="botoes"><button class="botao peq sec" data-acao="removerItemOrcamento" data-id="${i.id}">Remover item</button></div>` : ""}`;
 }
