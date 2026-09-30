@@ -15,6 +15,8 @@ export interface DadosSugestoes {
   investido: number;
   repasse: { total: number; com_nota: number };
   prefs: { renda_mensal: number | null; meta_poupanca_pct: number; reserva_meses: number };
+  /** Categorias com meta (meta_mensal = meta_valor ÷ periodicidade). */
+  metas?: { categoria: string; classe: string | null; meta_mensal: number; periodicidade_meses: number }[];
   cdi_anual: number;
   pendencias: { notas: number; sem_categoria: number };
   ufs_notas: string[];
@@ -83,20 +85,43 @@ export function gerarDiagnostico(d: DadosSugestoes) {
   // ---------- Plano 50/30/20
   const poupPct = Math.min(Math.max(d.prefs.meta_poupanca_pct, 0), 60) / 100;
   const essPct = 0.5, estiloPct = Math.max(1 - essPct - poupPct, 0);
+  // Classes: essencial_fixo + essencial_variavel = necessidades (50%); estilo_vida (30%);
+  // emergencial = imprevistos, pagos pela reserva (fora das metas; definem a meta da reserva).
   const despesas = arred(mediaRef(d.gastos));
-  const essencial = arred(mediaRef(d.gastos, (g) => g.classe === "essencial"));
-  const estilo = arred(despesas - essencial);
+  const essFixo = arred(mediaRef(d.gastos, (g) => g.classe === "essencial_fixo"));
+  const essVar = arred(mediaRef(d.gastos, (g) => g.classe === "essencial_variavel" || g.classe === "essencial"));
+  const essencial = arred(essFixo + essVar);
+  const imprevistos = arred(mediaRef(d.gastos, (g) => g.classe === "emergencial"));
+  const estilo = arred(mediaRef(d.gastos, (g) => g.classe === "estilo_vida"));
+  const semCategoria = arred(despesas - essencial - imprevistos - estilo);
   const dividasMes = arred(mediaRef(d.pagamentosDivida));
   const sobra = arred(renda - despesas - dividasMes);
+  // Últimos 12 meses completos (para imprevistos e viagens, que não acontecem todo mês)
+  const ano12 = mesesAnteriores(d.hoje, 12);
+  const meses12 = Math.max(ano12.filter((m) => d.gastos.some((g) => g.mes === m)).length, 1);
+  const soma12 = (f: (g: DadosSugestoes["gastos"][number]) => boolean) =>
+    d.gastos.filter((g) => ano12.includes(g.mes) && f(g)).reduce((s, g) => s + g.valor, 0);
+  const imprevistosAno = arred((soma12((g) => g.classe === "emergencial") / meses12) * 12);
+  const VIAGENS = ["Viagem para visitar", "Turismo"];
+  const viagensAno = arred((soma12((g) => VIAGENS.includes(g.categoria)) / meses12) * 12);
+  const anuais = (d.metas ?? []).filter((m) => m.periodicidade_meses > 1);
   const plano = {
     renda, origem_renda: origemRenda, meses: mesesComDados,
     gasto_ideal: arred(renda * (1 - poupPct)),
     despesas_media: despesas, dividas_media: dividasMes, sobra_media: sobra,
-    essencial: { ideal: arred(renda * essPct), atual: essencial },
+    essencial: { ideal: arred(renda * essPct), atual: essencial, fixo: essFixo, variavel: essVar },
     estilo_vida: { ideal: arred(renda * estiloPct), atual: estilo },
+    imprevistos: { atual: imprevistos, ano: imprevistosAno, meses_base: meses12 },
+    sem_categoria: semCategoria,
     poupanca: { ideal: arred(renda * poupPct), atual: sobra },
     pct: { essencial: essPct, estilo_vida: estiloPct, poupanca: poupPct },
   };
+  // Quanto separar por mês para o que não vence todo mês
+  const provisoes = [
+    ...(imprevistosAno > 0 ? [{ nome: "Imprevistos (reserva)", mensal: arred(imprevistosAno / 12), detalhe: `${R(imprevistosAno)} por ano, pela média dos últimos ${meses12} meses` }] : []),
+    ...(viagensAno > 0 ? [{ nome: "Viagens", mensal: arred(viagensAno / 12), detalhe: `${R(viagensAno)} por ano, pela média dos últimos ${meses12} meses` }] : []),
+    ...anuais.map((m) => ({ nome: m.categoria, mensal: arred(m.meta_mensal), detalhe: `meta de ${R(m.meta_mensal * m.periodicidade_meses)} a cada ${m.periodicidade_meses} meses` })),
+  ];
 
   const S: Sugestao[] = [];
   const cdiMensal = Math.pow(1 + d.cdi_anual / 100, 1 / 12) - 1;
@@ -179,10 +204,26 @@ export function gerarDiagnostico(d: DadosSugestoes) {
       .sort((a, b) => b[1].media - a[1].media).slice(0, 4);
     S.push({
       id: "estilo-vida", tipo: "economia", prioridade: 3, titulo: "Gastos de estilo de vida acima do planejado",
-      texto: `O plano reserva ${pct(estiloPct)} da renda (${R(plano.estilo_vida.ideal)}) para restaurantes, lazer, compras e assinaturas. A média foi ${R(estilo)}. Os maiores itens estão abaixo; cortar 20% deles já ajuda.`,
+      texto: `O plano reserva ${pct(estiloPct)} da renda (${R(plano.estilo_vida.ideal)}) para restaurantes, lazer, compras e viagens. A média foi ${R(estilo)}. Os maiores itens estão abaixo; cortar 20% deles já ajuda.`,
       economia_mensal: arred(estilo - plano.estilo_vida.ideal),
       itens: top.map(([nome, c]) => ({ rotulo: nome, valor: arred(c.media), detalhe: `−20% = ${R(c.media * 0.2)}/mês` })),
       acao: { rotulo: "Ver gastos", destino: "movimentacoes" },
+    });
+  }
+
+  // ---------- Metas por categoria
+  const metas = (d.metas ?? []).map((m) => {
+    const c = porCategoria.get(m.categoria);
+    return { categoria: m.categoria, classe: m.classe, meta_mensal: arred(m.meta_mensal), periodicidade_meses: m.periodicidade_meses,
+      media: arred(c?.media ?? 0), atual: arred(c?.atual ?? 0) };
+  }).sort((a, b) => (b.atual / (b.meta_mensal || 1)) - (a.atual / (a.meta_mensal || 1)));
+  const estouradas = metas.filter((m) => m.periodicidade_meses === 1 && m.meta_mensal > 0 && m.media > m.meta_mensal * 1.05);
+  if (estouradas.length) {
+    S.push({
+      id: "metas", tipo: "economia", prioridade: 3, titulo: "Categorias acima da meta",
+      texto: `Na média dos últimos ${nMeses} meses, ${estouradas.length === 1 ? "esta categoria passou" : "estas categorias passaram"} da meta que vocês definiram.`,
+      economia_mensal: arred(estouradas.reduce((s, m) => s + (m.media - m.meta_mensal), 0)),
+      itens: estouradas.slice(0, 6).map((m) => ({ rotulo: m.categoria, valor: m.media, detalhe: `meta ${R(m.meta_mensal)} · ${pct(m.media / m.meta_mensal - 1)} acima` })),
     });
   }
 
@@ -240,14 +281,14 @@ export function gerarDiagnostico(d: DadosSugestoes) {
     });
   }
 
-  // ---------- Repasses para a família sem nota
+  // ---------- Pix para a esposa sem nota
   if (d.repasse.total / nMeses >= 300) {
     const semNota = d.repasse.total - d.repasse.com_nota;
     const cobertura = d.repasse.total ? d.repasse.com_nota / d.repasse.total : 0;
     if (cobertura < 0.6) {
       S.push({
-        id: "repasse", tipo: "dica", prioridade: 4, titulo: "Repasses sem nota fiscal",
-        texto: `Dos ${R(d.repasse.total)} em repasses dos últimos ${nMeses} meses, só ${pct(cobertura)} têm nota escaneada. ${R(semNota)} ficam sem explicação: escanear as notas das compras mostra onde esse dinheiro vai.`,
+        id: "repasse", tipo: "dica", prioridade: 4, titulo: "Pix para a esposa sem nota fiscal",
+        texto: `Dos ${R(d.repasse.total)} enviados por Pix para as compras da casa nos últimos ${nMeses} meses, só ${pct(cobertura)} têm nota escaneada. ${R(semNota)} ficam sem explicação: escanear as notas das compras mostra onde esse dinheiro vai.`,
         acao: { rotulo: "Escanear nota", destino: "escanear" },
       });
     }
@@ -299,6 +340,15 @@ export function gerarDiagnostico(d: DadosSugestoes) {
 
   // ---------- Reserva de emergência e dinheiro parado
   const baseReserva = essencial + dividasMes;
+  if (provisoes.length) {
+    const total = provisoes.reduce((s, p) => s + p.mensal, 0);
+    S.push({
+      id: "provisoes", tipo: "meta", prioridade: 4, titulo: "Separe todo mês para o que não vence todo mês",
+      texto: `Imprevistos, viagens e contas anuais pesam quando chegam. Guardando ${R(total)} por mês numa caixinha para cada um, eles deixam de apertar o orçamento.`,
+      itens: provisoes.map((p) => ({ rotulo: p.nome, valor: p.mensal, detalhe: p.detalhe })),
+      acao: { rotulo: "Ver caixinhas", destino: "patrimonio_invest" },
+    });
+  }
   const reserva = {
     meta: arred(baseReserva * d.prefs.reserva_meses), atual: arred(d.investido),
     meses_cobertos: baseReserva > 0 ? Math.round((d.investido / baseReserva) * 10) / 10 : 0,
@@ -354,7 +404,7 @@ export function gerarDiagnostico(d: DadosSugestoes) {
 
   return {
     referencia: { meses: ref, mes_atual: mesAtual, cdi_anual: d.cdi_anual },
-    plano, reserva,
+    plano, reserva, provisoes, metas,
     dividas: { total: totalDividas, parcelas_mes: parcelasMes, comprometimento: Math.round(comprometido * 1000) / 1000, ordem },
     economia_potencial: economiaTotal,
     sugestoes: S,

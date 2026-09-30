@@ -1221,6 +1221,19 @@ async function telaMais() {
         : `<p class="nota-texto">As contas aparecem depois da primeira sincronização.</p>`}
     </div></details>
 
+    <details class="secao" id="secaoCategorias" ${estado.abrirCategorias ? "open" : ""}><summary>Categorias e metas</summary><div class="conteudo">
+      <p class="nota-texto" style="margin-top:0">Toque numa categoria para mudar nome, classe ou meta. Contas que vencem 1 vez por ano (seguro, IPVA) podem ter meta anual: o app divide por 12 e mostra quanto separar por mês.</p>
+      ${Object.entries(CLASSES).map(([k, rot]) => {
+        const cs = estado.categorias.filter((c) => c.classe === k && c.ativa);
+        return `<h3 style="margin:14px 0 4px">${rot}</h3><ul class="lista">${cs.map((c) => `<li class="linha" data-acao="editarCategoria" data-id="${c.id}">
+          <div class="corpo"><div class="titulo"><span class="ponto" style="background:${esc(c.cor)}"></span> ${esc(c.nome)}</div>
+          <div class="meta">${esc(c.grupo)} · ${c.meta_valor ? `meta ${Rp(c.meta_valor)} ${PERIODOS[c.periodicidade_meses] ?? ""}` : k === "emergencial" ? "sem meta (forma a reserva)" : "sem meta"}</div></div>
+          <span class="chip">editar</span></li>`).join("")}</ul>`;
+      }).join("")}
+      <h3 style="margin:14px 0 4px">Receitas e movimentos</h3>
+      <p class="nota-texto" style="margin:0">${estado.categorias.filter((c) => c.natureza !== "despesa").map((c) => esc(c.nome)).join(" · ")}</p>
+    </div></details>
+
     <details class="secao"><summary>Regras e categorias</summary><div class="conteudo">
       <p class="nota-texto">O app já vem com regras para mercados, farmácias, combustível, apps de transporte etc. Crie regras próprias para o que for só de vocês.</p>
       <label class="campo"><span>Quando a descrição contém</span><input type="text" id="regraTexto" placeholder="Ex.: PIX TRANSF MARIA"></label>
@@ -1238,6 +1251,9 @@ async function telaMais() {
       <div style="display:flex;gap:8px;align-items:flex-end">
         <label class="campo" style="flex:2"><span>Nome</span><input type="text" id="catNome" placeholder="Ex.: Filhos"></label>
         <label class="campo" style="flex:1"><span>Grupo</span><input type="text" id="catGrupo" placeholder="Família"></label>
+      </div>
+      <div style="display:flex;gap:8px;align-items:flex-end">
+        <label class="campo" style="flex:2"><span>Classe</span><select id="catClasse">${Object.entries(CLASSES).map(([k, r]) => `<option value="${k}">${r}</option>`).join("")}</select></label>
         <label class="campo" style="flex:0 0 52px"><span>Cor</span><input type="color" id="catCor" value="#4b8f8c" style="height:44px;width:52px;padding:2px;border-radius:10px;border:1px solid var(--borda)"></label>
       </div>
       <button class="botao peq" data-acao="criarCategoria">Adicionar categoria</button>
@@ -1267,6 +1283,7 @@ async function telaMais() {
     <div class="cartao plano"><div class="linha" style="cursor:default"><div class="corpo"><div class="titulo">${esc(estado.email)}</div><div class="meta">Versão ${VERSAO}</div></div>
       <button class="botao peq sec" data-acao="sair">Sair</button></div></div>`;
   montarCartaoBloqueio();
+  if (estado.abrirCategorias) { estado.abrirCategorias = false; $("#secaoCategorias")?.scrollIntoView({ block: "start" }); }
 }
 acoes.salvarPluggy = async (el) => {
   const corpo = {};
@@ -1326,11 +1343,57 @@ acoes.apagarRegra = async (el) => {
   try { await q(sb.from("regras_categoria").delete().eq("id", Number(el.dataset.id))); el.closest("li").remove(); avisar("Regra apagada"); }
   catch (e) { avisar(e.message, true); }
 };
+acoes.editarCategoria = (el) => {
+  const c = estado.catPorId[Number(el.dataset.id)];
+  if (!c) return;
+  abrirFolha(`<h2>${esc(c.nome)}</h2>
+    <label class="campo"><span>Nome</span><input type="text" id="ecNome" value="${esc(c.nome)}"></label>
+    <div style="display:flex;gap:8px">
+      <label class="campo" style="flex:1"><span>Grupo</span><input type="text" id="ecGrupo" value="${esc(c.grupo)}"></label>
+      <label class="campo" style="flex:0 0 52px"><span>Cor</span><input type="color" id="ecCor" value="${esc(c.cor)}" style="height:44px;width:52px;padding:2px;border-radius:10px;border:1px solid var(--borda)"></label>
+    </div>
+    <label class="campo"><span>Classe</span><select id="ecClasse">${Object.entries(CLASSES).map(([k, r]) => `<option value="${k}" ${c.classe === k ? "selected" : ""}>${r}</option>`).join("")}</select></label>
+    <div style="display:flex;gap:8px">
+      <label class="campo" style="flex:1"><span>Meta (R$)</span><input type="text" inputmode="decimal" id="ecMeta" value="${c.meta_valor ?? ""}" placeholder="sem meta"></label>
+      <label class="campo" style="flex:1"><span>Frequência</span><select id="ecPer">${Object.entries(PERIODOS).map(([k, r]) => `<option value="${k}" ${Number(c.periodicidade_meses ?? 1) === Number(k) ? "selected" : ""}>${r}</option>`).join("")}</select></label>
+    </div>
+    <p class="nota-texto">Emergenciais normalmente ficam sem meta: o quanto gastam por ano vira a meta da reserva para imprevistos.</p>
+    <div class="botoes"><button class="botao cheio" data-acao="salvarCategoria" data-id="${c.id}">Salvar</button></div>
+    <div class="botoes"><button class="botao peq sec" data-acao="arquivarCategoria" data-id="${c.id}">Ocultar categoria</button></div>`);
+};
+acoes.salvarCategoria = async (el) => {
+  const nome = $("#ecNome").value.trim();
+  if (!nome) return avisar("Dê um nome à categoria", true);
+  const meta = numeroDigitado($("#ecMeta").value);
+  el.disabled = true;
+  try {
+    await q(sb.from("categorias").update({
+      nome, grupo: $("#ecGrupo").value.trim() || "Outros", cor: $("#ecCor").value, classe: $("#ecClasse").value,
+      meta_valor: meta > 0 ? meta : null, periodicidade_meses: Number($("#ecPer").value),
+    }).eq("id", Number(el.dataset.id)));
+    await carregarCategorias();
+    cacheSugestoes = null;
+    avisar("Categoria salva");
+    fecharFolha();
+    estado.abrirCategorias = true;
+    recarregar();
+  } catch (e) { avisar(e.message, true); el.disabled = false; }
+};
+acoes.arquivarCategoria = async (el) => {
+  try {
+    await q(sb.from("categorias").update({ ativa: false }).eq("id", Number(el.dataset.id)));
+    await carregarCategorias();
+    avisar("Categoria ocultada (lançamentos antigos continuam com ela)");
+    fecharFolha(); estado.abrirCategorias = true; recarregar();
+  } catch (e) { avisar(e.message, true); }
+};
 acoes.criarCategoria = async () => {
   const nome = $("#catNome").value.trim();
   if (!nome) return avisar("Dê um nome à categoria", true);
   try {
-    await q(sb.from("categorias").insert({ nome, grupo: $("#catGrupo").value.trim() || "Outros", cor: $("#catCor").value, ordem: 85 }));
+    const classe = $("#catClasse").value;
+    const ordem = { essencial_variavel: 39, essencial_fixo: 59, emergencial: 69, estilo_vida: 89 }[classe] ?? 89;
+    await q(sb.from("categorias").insert({ nome, grupo: $("#catGrupo").value.trim() || "Outros", cor: $("#catCor").value, ordem, classe, natureza: "despesa" }));
     await carregarCategorias();
     avisar("Categoria criada");
     recarregar();
@@ -1782,16 +1845,26 @@ async function obterSugestoes(forcar = false) {
   return dados;
 }
 
-function barraPlano(rotulo, atual, ideal, cor, inverso = false, privado = false) {
+function barraPlano(rotulo, atual, ideal, cor, inverso = false, privado = false, nomeIdeal = "ideal") {
   const V = privado ? Rp : R;
   // inverso: para poupança, ficar abaixo do ideal é o problema
   const max = Math.max(atual, ideal, 1) * 1.1;
   const ruim = inverso ? atual < ideal : atual > ideal;
   return `<div class="plano-linha">
-    <div class="plano-rotulo"><span>${rotulo}</span><span class="num"><strong class="${ruim ? "sobe" : "desce"}">${V(Math.abs(atual), atual < 0 ? "−" : "")}</strong> <span class="nota-texto">/ ideal ${V(ideal)}</span></span></div>
+    <div class="plano-rotulo"><span>${rotulo}</span><span class="num"><strong class="${ruim ? "sobe" : "desce"}">${V(Math.abs(atual), atual < 0 ? "−" : "")}</strong> <span class="nota-texto">/ ${nomeIdeal} ${V(ideal)}</span></span></div>
     <div class="plano-trilho"><i style="width:${Math.max(0, (atual / max) * 100)}%;background:${cor}"></i><b style="left:${(ideal / max) * 100}%" title="ideal"></b></div>
   </div>`;
 }
+
+const CLASSES = {
+  essencial_variavel: "Essencial · valor variável",
+  essencial_fixo: "Essencial · valor fixo",
+  emergencial: "Emergencial · imprevistos",
+  estilo_vida: "Estilo de vida",
+};
+const CORES_CLASSE = { essencial_variavel: "var(--acento)", essencial_fixo: "#3b7dd8", emergencial: "#c0564b", estilo_vida: "#e5813b" };
+const PERIODOS = { 1: "por mês", 2: "a cada 2 meses", 3: "por trimestre", 6: "por semestre", 12: "por ano" };
+acoes.irCategorias = (el, e) => { e?.preventDefault?.(); estado.abrirCategorias = true; irPara("mais"); };
 
 async function telaSugestoes() {
   app.innerHTML = `<div class="topo"><h1>Sugestões</h1>${botaoOlho()}<button class="botao peq sec" data-acao="abrirPreferencias">Ajustar plano</button></div>
@@ -1811,11 +1884,22 @@ async function telaSugestoes() {
     <div class="cartao">
       <h3>Plano de gastos</h3>
       <p class="nota-texto" style="margin-top:0">Renda ${Rp(p.renda)} por mês (${esc(p.origem_renda || "não identificada")}). Pela regra ${Math.round(p.pct.essencial * 100)}/${Math.round(p.pct.estilo_vida * 100)}/${Math.round(p.pct.poupanca * 100)}, o <strong>gasto ideal é até ${Rp(p.gasto_ideal)}</strong>. Valores atuais: ${mesesTxt}.</p>
-      ${barraPlano("Essencial", p.essencial.atual, p.essencial.ideal, "var(--acento)", false, true)}
+      ${barraPlano("Essenciais", p.essencial.atual, p.essencial.ideal, "var(--acento)", false, true)}
+      ${p.essencial.fixo != null ? `<div class="plano-sub nota-texto">fixos ${Rp(p.essencial.fixo)} · variáveis ${Rp(p.essencial.variavel)}</div>` : ""}
       ${barraPlano("Estilo de vida", p.estilo_vida.atual, p.estilo_vida.ideal, "#e5813b", false, true)}
       ${barraPlano("Sobra para guardar/quitar", p.poupanca.atual, p.poupanca.ideal, "#3b7dd8", true, true)}
-      <p class="nota-texto">Essencial: mercado, casa, saúde, transporte, educação, juros. Estilo de vida: restaurantes, lazer, compras, assinaturas. ${p.dividas_media ? `Além das despesas, ${Rp(p.dividas_media)}/mês foram para pagar dívidas.` : ""}</p>
+      <ul class="lista" style="margin-top:6px">
+        ${p.imprevistos ? `<li class="linha" style="cursor:default"><div class="corpo"><div class="titulo">Imprevistos</div><div class="meta">Pagos pela reserva, fora das metas</div></div><div class="valor num">${Rp(p.imprevistos.atual)}</div></li>` : ""}
+        ${p.dividas_media ? `<li class="linha" style="cursor:default"><div class="corpo"><div class="titulo">Parcelas de dívidas</div><div class="meta">Compromisso fixo; a compra já contou quando foi feita</div></div><div class="valor num">${Rp(p.dividas_media)}</div></li>` : ""}
+        ${p.sem_categoria > 1 ? `<li class="linha" data-acao="acaoSugestao" data-destino="movimentacoes" data-filtro="sem-categoria"><div class="corpo"><div class="titulo">Sem categoria</div><div class="meta">Categorize para o plano ficar certo</div></div><div class="valor num">${Rp(p.sem_categoria)}</div></li>` : ""}
+      </ul>
     </div>
+
+    ${d.metas?.length ? `<div class="cartao">
+      <h3>Metas do mês</h3>
+      ${d.metas.map((m) => barraPlano(esc(m.categoria) + (m.periodicidade_meses > 1 ? ` <span class="nota-texto">(provisão)</span>` : ""), m.periodicidade_meses > 1 ? m.media : m.atual, m.meta_mensal, CORES_CLASSE[m.classe] ?? "var(--acento)", false, true, "meta")).join("")}
+      <p class="nota-texto">Gasto deste mês até hoje contra a meta mensal. Contas anuais mostram a média mensal contra a provisão. Ajuste as metas em Mais → Categorias e metas.</p>
+    </div>` : `<div class="cartao"><h3>Metas do mês</h3><p class="nota-texto" style="margin:0">Nenhuma meta ainda. Defina em <a href="#" data-acao="irCategorias">Mais → Categorias e metas</a>.</p></div>`}
 
     ${d.dividas.ordem.length ? `<div class="cartao" data-acao="irPatrimonio" data-s="dividas" style="cursor:pointer">
       <h3>Dívidas</h3>

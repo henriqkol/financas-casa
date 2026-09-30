@@ -587,12 +587,13 @@ async function montarSugestoes() {
   const ref = mesesAnteriores(hoje, 3);
   const desdeMes = ref[0];
   const desdeDia = `${desdeMes}-01`;
-  const catLista = ok(await db.from("categorias").select("id, nome, classe, natureza")) as any[];
+  const catLista = ok(await db.from("categorias").select("id, nome, classe, natureza, meta_valor, periodicidade_meses")) as any[];
+  const desde12 = mesesAnteriores(hoje, 12)[0];   // imprevistos e viagens usam 12 meses
   const catPorId = Object.fromEntries(catLista.map((c) => [c.id, c]));
   const catPorNome = Object.fromEntries(catLista.map((c) => [c.nome, c]));
 
   const [gastosLin, receitasLin, fluxo, txs, contas, dividas, vdiv, invs, prefs, pend, notasUf] = await Promise.all([
-    todos((de, ate) => db.from("v_gastos").select("transacao_id, mes, categoria, categoria_id, valor, via_nota").eq("conta_como_gasto", true).gte("mes", desdeMes).range(de, ate)),
+    todos((de, ate) => db.from("v_gastos").select("transacao_id, mes, categoria, categoria_id, valor, via_nota").eq("conta_como_gasto", true).gte("mes", desde12).range(de, ate)),
     todos((de, ate) => db.from("v_receitas").select("mes, categoria, valor").gte("mes", desdeMes).range(de, ate)),
     ok(await db.from("v_fluxo_mensal").select("mes, pagamento_dividas").gte("mes", desdeMes)),
     todos((de, ate) => db.from("transacoes").select("id, data, descricao, recebedor_nome, valor, tipo_operacao, categoria_id").eq("sentido", "saida").eq("removida", false).gte("data", desdeDia).range(de, ate)),
@@ -609,12 +610,12 @@ async function montarSugestoes() {
   const agg = new Map<string, { mes: string; categoria: string; classe: string | null; valor: number; ids: Set<string> }>();
   for (const g of gastosLin) {
     const k = `${g.mes}|${g.categoria}`;
-    const a = agg.get(k) ?? { mes: g.mes, categoria: g.categoria, classe: catPorId[g.categoria_id]?.classe ?? "estilo_vida", valor: 0, ids: new Set<string>() };
+    const a = agg.get(k) ?? { mes: g.mes, categoria: g.categoria, classe: g.categoria_id == null ? "sem_categoria" : (catPorId[g.categoria_id]?.classe ?? "estilo_vida"), valor: 0, ids: new Set<string>() };
     a.valor += Number(g.valor); a.ids.add(g.transacao_id);
     agg.set(k, a);
   }
-  const repasseCat = "Repasse família";
-  // Repasses: Pix sem nota categorizados como "Repasse família" + Pix que já têm nota ligada
+  const repasseCat = "Pix para esposa (sem nota)";
+  // Pix para a esposa: o que ainda está sem nota + Pix que já têm nota ligada (compras da casa)
   const opPorTx = new Map((txs as any[]).map((t) => [t.id, t.tipo_operacao]));
   const repasseSemNota = gastosLin.filter((g: any) => g.categoria === repasseCat && ref.includes(g.mes)).reduce((s: number, g: any) => s + Number(g.valor), 0);
   const repasseNota = gastosLin.filter((g: any) => ref.includes(g.mes) && g.via_nota && opPorTx.get(g.transacao_id) === "PIX").reduce((s: number, g: any) => s + Number(g.valor), 0);
@@ -632,7 +633,7 @@ async function montarSugestoes() {
     if (!ref.includes(mes)) continue;
     const cat = catPorId[t.categoria_id];
     if (cat && cat.natureza !== "despesa") continue;
-    if (cat?.nome === repasseCat || cat?.nome === "Tarifas e juros") continue;
+    if (cat?.nome === repasseCat || cat?.nome === "Repasse família" || cat?.nome === "Tarifas e juros") continue;
     const k = chaveAprendizado(textoTx(t));
     if (!k) continue;
     const g = grupos.get(k) ?? { descricao: t.recebedor_nome || t.descricao, categoria_id: t.categoria_id, meses: new Map() };
@@ -672,6 +673,10 @@ async function montarSugestoes() {
       meta_poupanca_pct: Number(p.meta_poupanca_pct ?? 20),
       reserva_meses: Number(p.reserva_meses ?? 6),
     },
+    metas: catLista.filter((c) => c.meta_valor != null && Number(c.meta_valor) > 0).map((c) => ({
+      categoria: c.nome, classe: c.classe, periodicidade_meses: Number(c.periodicidade_meses ?? 1),
+      meta_mensal: Number(c.meta_valor) / Number(c.periodicidade_meses ?? 1),
+    })),
     cdi_anual: await cdiAnual(),
     pendencias: {
       notas: (pend as any[]).filter((x) => x.tipo === "nota_sem_gasto").length,

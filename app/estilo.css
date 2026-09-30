@@ -281,3 +281,4 @@ body.bloqueado #app, body.bloqueado #abas, body.bloqueado #offline { display: no
 body.fundo-privado #app { filter: blur(18px); }
 .icone-cadeado { width: 56px; height: 56px; margin: 4px auto 0; border-radius: 50%; background: var(--acento-2); color: var(--acento); display: flex; align-items: center; justify-content: center; }
 .icone-cadeado svg { width: 28px; height: 28px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.plano-sub { margin: -8px 0 10px; font-size: 12.5px; }

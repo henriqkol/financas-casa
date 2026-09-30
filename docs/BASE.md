@@ -17,8 +17,13 @@ contas ──< transacoes >──< nota_transacao >──< notas ──< nota_it
 - **notas / nota_itens**: notas fiscais escaneadas (NFC-e) e seus produtos, cada item com categoria.
 - **nota_transacao**: qual nota explica qual gasto (uma nota pode cobrir várias parcelas; um Pix pode cobrir várias notas).
 - **categorias**: `natureza` = `despesa` | `receita` | `neutro` (movimento que não é consumo nem renda: fatura, transferência
-  entre contas próprias, investimentos, crédito contratado, pagamento de dívida). `classe` (só despesas) = `essencial` | `estilo_vida`,
-  base do plano 50/30/20. `conta_como_gasto = false` para tudo que não é despesa (evita contar a fatura do cartão duas vezes).
+  entre contas próprias, investimentos, crédito contratado, pagamento de dívida). `conta_como_gasto = false` para tudo que não é despesa.
+  `classe` (despesas) = `essencial_variavel` (valor variável, meta fixa) · `essencial_fixo` (valor fixo, meta fixa) ·
+  `emergencial` (imprevistos, sem meta: formam a meta da reserva) · `estilo_vida`. "Pagamento de dívida" é neutro mas tem classe
+  `essencial_fixo` (compromisso do mês, fora da soma de gastos). Metas: `meta_valor` por período e `periodicidade_meses`
+  (1 mensal … 12 anual); meta mensal = meta_valor ÷ periodicidade.
+- Família: **Repasse família** = ajuda fixa às mães. **Pix para esposa (sem nota)** = dinheiro das compras da casa que a esposa faz;
+  quando a nota é escaneada o valor passa para as categorias dos itens.
 
 ## Visões prontas (use estas primeiro)
 
@@ -28,6 +33,7 @@ contas ──< transacoes >──< nota_transacao >──< notas ──< nota_it
 | `v_resumo_mensal` | Total por mês e categoria (só o que é gasto) |
 | `v_itens_comprados` | Todos os produtos comprados: data, loja, descrição, quantidade, preço unitário, total, categoria. Bom para comparar preços e consumo |
 | `v_receitas` | Entradas que são renda (salário, Pix recebidos, reembolsos, rendimentos): transacao_id, data, mes, descricao, conta, valor, categoria |
+| `v_metas` | Categorias com meta: meta mensal equivalente e gasto no mês atual |
 | `v_fluxo_mensal` | Por mês: receitas, despesas (consumo), pagamento_dividas e sobra |
 | `v_pendencias` | Notas sem gasto ligado e lançamentos (despesas ou receitas) sem categoria |
 
@@ -50,7 +56,7 @@ from v_itens_comprados where descricao_norm like '%LEITE%' group by 1 order by 2
 -- Quanto entrou, gastou e sobrou por mês
 select * from v_fluxo_mensal order by mes;
 
--- Gasto por classe (essencial x estilo de vida) nos últimos meses
+-- Gasto por classe (essencial fixo/variável, emergencial, estilo de vida) nos últimos meses
 select g.mes, c.classe, sum(g.valor) from v_gastos g join categorias c on c.id = g.categoria_id
 where g.conta_como_gasto group by 1, 2 order by 1, 2;
 

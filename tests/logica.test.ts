@@ -310,13 +310,13 @@ function dadosBase(extra: any = {}) {
     hoje: "2026-09-20",
     gastos: [
       ...meses.flatMap((mes) => [
-        { mes, categoria: "Mercado", classe: "essencial", valor: 2000, n: 10 },
-        { mes, categoria: "Contas da casa", classe: "essencial", valor: 1500, n: 4 },
+        { mes, categoria: "Mercado", classe: "essencial_variavel", valor: 2000, n: 10 },
+        { mes, categoria: "Contas da casa", classe: "essencial_fixo", valor: 1500, n: 4 },
         { mes, categoria: "Restaurante e delivery", classe: "estilo_vida", valor: 1200, n: 15 },
         { mes, categoria: "Lazer", classe: "estilo_vida", valor: 800, n: 3 },
-        { mes, categoria: "Tarifas e juros", classe: "essencial", valor: 900, n: 6 },
+        { mes, categoria: "Tarifas e juros", classe: "essencial_fixo", valor: 900, n: 6 },
       ]),
-      { mes: "2026-09", categoria: "Mercado", classe: "essencial", valor: 2400, n: 9 },
+      { mes: "2026-09", categoria: "Mercado", classe: "essencial_variavel", valor: 2400, n: 9 },
     ],
     receitas: meses.map((mes) => ({ mes, categoria: "Salário", valor: 11300 })),
     pagamentosDivida: meses.map((mes) => ({ mes, valor: 2300 })),
@@ -379,4 +379,33 @@ test("sugestões: renda informada tem prioridade e déficit vira alerta", () => 
   assert.equal(r.plano.origem_renda, "informada");
   assert.ok(r.sugestoes.some((s: any) => s.id === "deficit"));
   assert.ok(r.sugestoes.some((s: any) => s.id === "comprometimento"));
+});
+
+test("sugestões: classes novas — imprevistos à parte, provisões e metas", () => {
+  const meses12 = ["2025-10","2025-11","2025-12","2026-01","2026-02","2026-03","2026-04","2026-05","2026-06","2026-07","2026-08"];
+  const base = dadosBase();
+  const r = gerarDiagnostico(dadosBase({
+    gastos: [
+      ...base.gastos,
+      { mes: "2026-07", categoria: "Mecânica e pneus", classe: "emergencial", valor: 1200, n: 1 },
+      { mes: "2026-02", categoria: "Remédios não planejados", classe: "emergencial", valor: 600, n: 1 },
+      { mes: "2026-01", categoria: "Turismo", classe: "estilo_vida", valor: 2400, n: 2 },
+      ...meses12.map((mes) => ({ mes, categoria: "Mercado", classe: "essencial_variavel", valor: 1, n: 1 })),
+      { mes: "2026-08", categoria: "Sem categoria", classe: "sem_categoria", valor: 300, n: 3 },
+    ],
+    metas: [
+      { categoria: "Restaurante e delivery", classe: "estilo_vida", meta_mensal: 600, periodicidade_meses: 1 },
+      { categoria: "Seguro veículo", classe: "essencial_fixo", meta_mensal: 200, periodicidade_meses: 12 },
+    ],
+  }));
+  assert.equal(r.plano.essencial.fixo, 2400);          // contas 1500 + juros 900
+  assert.equal(r.plano.imprevistos.atual, 400);        // 1200 em julho ÷ 3 meses
+  assert.equal(r.plano.sem_categoria, 100);
+  assert.equal(r.plano.estilo_vida.atual, 2000);       // restaurante + lazer (imprevistos e sem categoria fora)
+  assert.equal(r.plano.imprevistos.ano, 1963.64);        // 1800 em 11 meses com dados → por 12 meses
+  const prov = r.provisoes.map((p: any) => p.nome);
+  assert.deepEqual(prov, ["Imprevistos (reserva)", "Viagens", "Seguro veículo"]);
+  const metas = r.sugestoes.find((s: any) => s.id === "metas");
+  assert.ok(metas && metas.itens[0].rotulo === "Restaurante e delivery");
+  assert.ok(r.sugestoes.some((s: any) => s.id === "provisoes"));
 });
