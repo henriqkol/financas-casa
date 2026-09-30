@@ -589,19 +589,90 @@ async function telaGastos() {
       ${catF != null ? `<button class="filtro ativo" data-acao="limparCategoria">${esc(nomeCat)} ✕</button>` : ""}
       ${[["tudo", "Tudo"], ["despesas", "Despesas"], ["receitas", "Receitas"], ["sem-nota", "Sem nota"], ["sem-categoria", "Sem categoria"]]
         .map(([k, n]) => `<button class="filtro ${f === k ? "ativo" : ""}" data-acao="filtroGastos" data-f="${k}">${n}</button>`).join("")}
-    </div><div id="conteudo">${carregando()}</div>`;
+    </div>
+    <div class="busca"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input type="search" id="buscaMov" placeholder="Buscar nome, loja, item da nota ou valor" value="${esc(estado.busca ?? "")}" autocomplete="off" enterkeyhint="search">
+      <button class="limpar-busca" data-acao="limparBusca" aria-label="Limpar busca" ${estado.busca ? "" : "hidden"}>✕</button></div>
+    <div id="conteudo">${carregando()}</div>`;
+  const campo = $("#buscaMov");
+  let timerBusca;
+  campo.addEventListener("input", () => {
+    $(".limpar-busca").hidden = !campo.value;
+    clearTimeout(timerBusca);
+    timerBusca = setTimeout(() => { estado.busca = campo.value.trim(); carregarMovimentacoes(); }, 250);
+  });
+  await carregarMovimentacoes();
+}
+acoes.limparBusca = () => { estado.busca = ""; const c = $("#buscaMov"); if (c) { c.value = ""; c.focus(); } $(".limpar-busca").hidden = true; carregarMovimentacoes(); };
 
-  const [ini, fim] = limites(estado.mes);
-  let txs = await todas(() => sb.from("transacoes")
-    .select("id, data, descricao, valor, sentido, status, categoria_id, parcela_numero, parcelas_total, observacao, contas(apelido, nome, tipo), nota_transacao(nota_id, notas(nome_emitente))")
-    .eq("removida", false).gte("data", ini).lt("data", fim)
-    .order("data", { ascending: false }).order("valor", { ascending: false }));
+/** Transforma a busca em palavras (sem acento) e valores: "açaí 36,75" → texto ["ACAI"], valores [36.75]. */
+function interpretarBusca(texto) {
+  const termos = normalizar(texto).replace(/R\$\s*/g, "").split(" ").filter(Boolean);
+  const palavras = [], valores = [];
+  for (const t of termos) {
+    if (/^\d{1,3}(\.\d{3})+(,\d{1,2})?$|^\d+([.,]\d{1,2})?$/.test(t)) {
+      const limpo = t.includes(",") ? t.replace(/\./g, "").replace(",", ".") : (/^\d{1,3}(\.\d{3})+$/.test(t) ? t.replace(/\./g, "") : t);
+      valores.push({ valor: Number(limpo), exato: /[.,]\d{1,2}$/.test(t) && !/^\d{1,3}(\.\d{3})+$/.test(t), texto: t });
+    } else palavras.push(t);
+  }
+  return { palavras, valores };
+}
+function bateValor(v, alvo) {
+  return alvo.exato ? Math.abs(v - alvo.valor) < 0.005 : Math.floor(v) === Math.floor(alvo.valor);
+}
+
+let cacheBusca = null;
+async function carregarMovimentacoes() {
+  const f = estado.filtroGastos;
+  const catF = estado.categoriaFiltro;
+  const nomeCat = catF === "nula" ? "Sem categoria" : estado.catPorId[catF]?.nome;
+  const busca = (estado.busca ?? "").trim();
+  const buscando = busca.length > 0;
+  const cont = $("#conteudo");
+  if (!cont) return;
+  if (buscando && !cont.querySelector(".linha")) cont.innerHTML = carregando();
+  const campos = "id, data, descricao, valor, sentido, status, categoria_id, parcela_numero, parcelas_total, observacao, contas(apelido, nome, tipo), nota_transacao(nota_id, notas(nome_emitente))";
+
+  let txs, itensQueBatem = new Map();
+  if (buscando) {
+    // Busca em todos os meses (a lista completa fica guardada por 2 minutos para a digitação ficar rápida)
+    if (!cacheBusca || Date.now() - cacheBusca.em > 120000) {
+      cacheBusca = { em: Date.now(), txs: await todas(() => sb.from("transacoes").select(campos).eq("removida", false)
+        .order("data", { ascending: false }).order("valor", { ascending: false })) };
+    }
+    const { palavras, valores } = interpretarBusca(busca);
+    // Itens de nota fiscal (já guardados sem acento) que contêm todas as palavras
+    if (palavras.length) {
+      const maior = [...palavras].sort((a, b) => b.length - a.length)[0];
+      if (maior.length >= 3) {
+        const itens = await q(sb.from("nota_itens").select("nota_id, descricao, descricao_norm").ilike("descricao_norm", `%${maior}%`).limit(500)).catch(() => []);
+        for (const i of itens) if (palavras.every((p) => (i.descricao_norm ?? normalizar(i.descricao)).includes(p))) {
+          if (!itensQueBatem.has(i.nota_id)) itensQueBatem.set(i.nota_id, i.descricao);
+        }
+      }
+    }
+    txs = cacheBusca.txs.filter((t) => {
+      if (valores.length && !valores.every((v) => bateValor(Number(t.valor), v))) return false;
+      if (!palavras.length) return true;
+      const texto = normalizar([t.descricao, t.observacao, t.contas?.apelido, t.contas?.nome, estado.catPorId[t.categoria_id]?.nome,
+        ...t.nota_transacao.map((v) => v.notas?.nome_emitente)].filter(Boolean).join(" "));
+      if (palavras.every((p) => texto.includes(p))) return true;
+      return t.nota_transacao.some((v) => itensQueBatem.has(v.nota_id));
+    });
+  } else {
+    const [ini, fim] = limites(estado.mes);
+    txs = await todas(() => sb.from("transacoes").select(campos)
+      .eq("removida", false).gte("data", ini).lt("data", fim)
+      .order("data", { ascending: false }).order("valor", { ascending: false }));
+  }
+  if ((estado.busca ?? "").trim() !== busca) return;   // chegou outra busca enquanto esta carregava
 
   let valorNaCategoria = null;
   if (catF != null && natureza(catF) === "despesa" || catF === "nula") {
     // Despesas com nota são divididas pelas categorias dos itens
     const alocado = await todas(() => {
-      let c = sb.from("v_gastos").select("transacao_id, valor").eq("mes", estado.mes);
+      let c = sb.from("v_gastos").select("transacao_id, valor");
+      if (!buscando) c = c.eq("mes", estado.mes);
       return catF === "nula" ? c.is("categoria_id", null) : c.eq("categoria_id", catF);
     });
     valorNaCategoria = new Map();
@@ -616,9 +687,13 @@ async function telaGastos() {
   if (f === "sem-categoria") txs = txs.filter((t) => t.categoria_id == null);
 
   if (!txs.length) {
-    $("#conteudo").innerHTML = `<div class="vazio"><strong>Nada por aqui</strong>Nenhum lançamento com este filtro em ${nomeMes(estado.mes)}.</div>`;
+    $("#conteudo").innerHTML = buscando
+      ? `<div class="vazio"><strong>Nada encontrado</strong>Nenhum lançamento com “${esc(busca)}” em nenhum mês${f !== "tudo" || catF != null ? " (com os filtros escolhidos)" : ""}.</div>`
+      : `<div class="vazio"><strong>Nada por aqui</strong>Nenhum lançamento com este filtro em ${nomeMes(estado.mes)}.</div>`;
     return;
   }
+  const totalEncontrado = txs.length;
+  if (buscando && txs.length > 300) txs = txs.slice(0, 300);
   const valorDe = (t) => Number(valorNaCategoria?.get(t.id) ?? t.valor);
   const somaTipo = (lista, tipo) => lista.filter((t) => tipoLancamento(t) === tipo).reduce((s, t) => s + valorDe(t), 0);
   const entradas = somaTipo(txs, "receita"), saidas = somaTipo(txs, "despesa");
@@ -631,7 +706,7 @@ async function telaGastos() {
       <div><span class="nota-texto">Despesas</span><strong class="num">${Rp(saidas, "−")}</strong></div>
       <div><span class="nota-texto">Resultado</span><strong class="num ${entradas - saidas >= 0 ? "entrada" : "sobe"}">${Rp(Math.abs(entradas - saidas), entradas - saidas >= 0 ? "+" : "−")}</strong></div>
     </div>
-    <div class="nota-texto" style="margin:0 2px 4px">${txs.length} lançamento(s)${valorNaCategoria && catF !== "nula" ? ` · ${Rp(saidas)} em ${esc(nomeCat)}` : ""}. Movimentos entre contas, faturas e investimentos aparecem em cinza e não entram nas somas.</div>
+    <div class="nota-texto" style="margin:0 2px 4px">${buscando ? `${totalEncontrado} resultado(s) para “${esc(busca)}” em todos os meses${totalEncontrado > txs.length ? ` (mostrando os ${txs.length} mais recentes)` : ""}` : `${txs.length} lançamento(s)`}${valorNaCategoria && catF !== "nula" ? ` · ${Rp(saidas)} em ${esc(nomeCat)}` : ""}. Movimentos entre contas, faturas e investimentos aparecem em cinza e não entram nas somas.</div>
     ${[...porDia.entries()].map(([dia, lista]) => {
       const e = somaTipo(lista, "receita"), sd = somaTipo(lista, "despesa");
       return `<div class="dia"><span>${dataLonga(dia)}</span><span class="num">${e ? `<span class="entrada">${Rp(e, "+")}</span>` : ""}${e && sd ? " · " : ""}${sd ? `−${R(sd)}` : ""}</span></div>
@@ -644,6 +719,7 @@ async function telaGastos() {
           <div class="corpo">
             <div class="titulo">${nota ? ICONE_NOTA + " " : ""}${esc(nota?.nome_emitente || t.descricao)}</div>
             <div class="meta">${esc(t.contas?.apelido || t.contas?.nome || "")}${t.parcelas_total > 1 ? ` · ${t.parcela_numero}/${t.parcelas_total}` : ""}${t.status === "PENDING" ? " · pendente" : ""} ${chipCategoria(t.categoria_id)}</div>
+            ${buscando && t.nota_transacao.some((v) => itensQueBatem.has(v.nota_id)) ? `<div class="meta item-achado">na nota: ${esc(itensQueBatem.get(t.nota_transacao.find((v) => itensQueBatem.has(v.nota_id)).nota_id))}</div>` : ""}
           </div>
           <div class="valor num ${tipo === "receita" ? "entrada" : tipo === "neutro" ? "neutro" : ""}">${t.sentido === "entrada" ? Rp(t.valor, "+") : `−${R(t.valor)}`}${vCat != null && Math.abs(vCat - t.valor) > 0.01 ? `<div class="nota-texto" style="text-align:right">${R(vCat)} aqui</div>` : ""}</div>
         </li>`;

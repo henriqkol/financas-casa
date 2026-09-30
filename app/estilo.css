@@ -298,3 +298,12 @@ details.pagas summary { cursor: pointer; padding: 8px 0 2px; }
 .cartao.objetivo.atingido { border-left: 4px solid var(--ok); }
 .cartao.acordo.atrasado { border-left: 4px solid var(--alerta); }
 .cartao.acordo { cursor: pointer; }
+
+/* Busca em Movimentações */
+.busca { position: relative; display: flex; align-items: center; margin: 0 0 12px; }
+.busca svg { position: absolute; left: 12px; width: 18px; height: 18px; fill: none; stroke: var(--texto-3); stroke-width: 2; stroke-linecap: round; pointer-events: none; }
+.busca input { width: 100%; height: 44px; border-radius: 12px; border: 1px solid var(--borda); background: var(--superficie); color: var(--texto); padding: 0 40px 0 38px; font-size: 15px; -webkit-appearance: none; appearance: none; }
+.busca input:focus { outline: 2px solid var(--acento); outline-offset: -1px; }
+.busca input::-webkit-search-cancel-button { display: none; }
+.busca .limpar-busca { position: absolute; right: 6px; width: 32px; height: 32px; border: 0; border-radius: 50%; background: var(--superficie-2); color: var(--texto-2); cursor: pointer; font-size: 13px; }
+.item-achado { color: var(--acento); }
