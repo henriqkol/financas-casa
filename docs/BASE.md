@@ -122,5 +122,7 @@ from orcamento_grupos g join orcamento_itens i on i.grupo_id = g.id and i.ativo 
 - `regras_categoria`: regras de categorização (regex em MAIÚSCULAS sem acento, ou `exato` = aprendida no app).
 - `sync_log`: histórico da sincronização com o Open Finance (roda 06:15 e 18:15).
 - `pluggy_itens`, `contas`: conexões e contas do Open Finance.
-- `membros`: e-mails com acesso ao app.
+- `casas`: cada família/casa. **Casa 1 = Henrique e Laynara.** Toda tabela de dados tem `casa_id`; ao consultar, filtre `casa_id = 1` para ver só os dados da casa 1.
+- `membros`: e-mails com acesso a cada casa (`casa_id`, `aceito_em` nulo = convite pendente). `usuarios`: casa aberta por cada e-mail.
+- `casa_config`: chaves privadas de cada casa (Pluggy, Anthropic). **Nunca exibir o conteúdo.**
 - `app_config`: segredos (credenciais Pluggy etc.). **Nunca exibir o conteúdo.**

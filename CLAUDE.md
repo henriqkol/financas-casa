@@ -4,7 +4,7 @@ App de controle financeiro doméstico do Rique (e da esposa). Tudo em português
 
 ## Arquitetura
 - `app/` — PWA sem build (ES modules, supabase-js via jsdelivr). Publicado em https://henriqkol.github.io/financas-casa/ : o workflow `publicar-app.yml` copia `app/` para o ramo `gh-pages` a cada push em `main`.
-- `supabase/migrations/` — esquema do Postgres (Supabase, projeto `hisraarbwhuhovommgqo`, região São Paulo). RLS: só e-mails em `membros` veem dados; `app_config` só o servidor lê.
+- `supabase/migrations/` — esquema do Postgres (Supabase, projeto `hisraarbwhuhovommgqo`, região São Paulo). **Várias casas** (0011): toda tabela de dados tem `casa_id` (default `casa_atual()`) e RLS `casa_id = casa_atual()`. `casa_atual()` = casa aberta em `usuarios` pelo e-mail do JWT, desde que o e-mail esteja em `membros` daquela casa. RPC `entrar()` (chamada ao abrir o app) cria casa nova para quem não tem convite (copia `modelo_categorias`/`modelo_regras`) ou aceita convite pendente (`membros.aceito_em` nulo); `trocar_casa`, `sair_da_casa`, `minhas_casas`. `app_config` (global: cron_secret, functions_url, CDI) e `casa_config` (por casa: Pluggy, Anthropic, `robo_senha`) só o servidor lê. Casa 1 = dados originais do Henrique/Laynara. Em SQL como postgres não há filtro de RLS: **sempre filtrar `casa_id`** nas consultas.
 - `supabase/functions/api/` — Edge Function única (Deno) com rotas `/nfce`, `/sync`, `/vincular`, `/categorizar-*`, `/config`… Deploy com `verify_jwt = false` (a função valida o JWT e o segredo do cron por conta própria).
 - `tests/` — testes da lógica pura: `node --experimental-strip-types --test tests/logica.test.ts`.
 
@@ -14,7 +14,7 @@ App de controle financeiro doméstico do Rique (e da esposa). Tudo em português
 - Função: faça push em `main` e depois `deploy_edge_function` (nome `api`, `verify_jwt: false`) com um único `index.ts` que importa o código do GitHub fixado no commit: `import "https://raw.githubusercontent.com/henriqkol/financas-casa/<commit>/supabase/functions/api/index.ts";` (o repositório é público). Também funciona enviar `index.ts` + `lib/*.ts` diretamente.
 
 ## Fluxos principais
-- **Open Finance**: Meu Pluggy (grátis, uso pessoal). Credenciais e IDs de Item ficam em `app_config`/`pluggy_itens`, cadastrados na tela Mais. `pg_cron` chama `/api/sync` 2x/dia (`disparar_sync()` lê `functions_url` e `cron_secret` de `app_config`).
+- **Open Finance**: Meu Pluggy (grátis, uso pessoal). Credenciais ficam em `casa_config` (uma Pluggy por casa) e IDs de Item em `pluggy_itens`, cadastrados na tela Mais. `pg_cron` chama `/api/sync` 2x/dia (`disparar_sync()` lê `functions_url` e `cron_secret` de `app_config`); a função sincroniza cada casa com Pluggy configurada logando como o robô da casa (`robo-casa-N@financas-casa.app`, membro só dela). A função `api` usa o JWT de quem chamou (cliente por requisição via AsyncLocalStorage, proxy `db`), então o RLS vale também no servidor; `adm` (service role) só para config/robôs. Rotas do agendamento aceitam `{"casa": N}` (padrão 1).
   IDs de transação da Pluggy mudam quando o banco reapresenta lançamentos: o sync marca os sumidos como `removida` e transfere vínculo/categoria manual para o substituto (`provider_id` ou valor+descrição+data).
 - **NFC-e**: QR → `lib/nfce.ts` (RS usa `dfe-portal.svrs.rs.gov.br/Dfe/QrCodeNFce?p=…`, layout "Portal NFC-e"). Se a leitura falhar, o HTML fica em `notas.html_bruto` para ajustar o parser.
 - **Vínculo nota ↔ gasto**: `lib/vinculo.ts` — mesmo valor (ou parcela × n), janela −3/+10 dias, bônus por CNPJ/nome. Automático só quando há um candidato claramente melhor; senão a nota fica "confirmar".
@@ -39,7 +39,7 @@ App de controle financeiro doméstico do Rique (e da esposa). Tudo em português
 - Metas por categoria (0008) foram removidas: a meta vive no orçamento.
 
 ## Login com Google
-- Botão "Entrar com Google" aparece só se o provedor Google estiver ligado no Supabase (`/auth/v1/settings`). `signInWithOAuth` volta para a URL do app; o acesso continua controlado pela tabela `membros` (e-mail do Google precisa estar lá). Mesmo e-mail de uma conta com senha = mesmo usuário (o Supabase liga as identidades).
+- Botão "Entrar com Google" aparece só se o provedor Google estiver ligado no Supabase (`/auth/v1/settings`). `signInWithOAuth` volta para a URL do app; qualquer login novo ganha uma casa própria, vazia; convite (Mais → Casa e convites) põe o e-mail em `membros` da casa. Mesmo e-mail de uma conta com senha = mesmo usuário (o Supabase liga as identidades).
 
 ## Bloqueio com biometria
 - Mais → "Bloqueio com biometria" cria uma credencial WebAuthn de plataforma (digital/rosto/PIN do aparelho) e guarda só o id em `localStorage.bloqueioBiometria`. Com ele ativo, `iniciar()` chama `exigirDesbloqueio()` antes de mostrar qualquer dado; ao voltar ao app depois de 1 min fora, pede de novo. É uma trava local (não substitui o login do Supabase). `Sair` remove o bloqueio.
