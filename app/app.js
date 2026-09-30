@@ -109,9 +109,11 @@ window.addEventListener("online", () => {
 });
 let sessaoOffline = false;
 
+/** Prefixo das cópias offline: cada casa tem as suas. */
+const chaveCasa = (p) => p + (estado.casa?.casa_id ?? "") + ":";
 async function q(consulta) {
   const leitura = consulta?.method === "GET" && consulta?.url;
-  const chave = leitura ? "q:" + consulta.url.toString() : null;
+  const chave = leitura ? chaveCasa("q") + consulta.url.toString() : null;
   if (!navigator.onLine) {
     // Sem rede: nem tenta (a biblioteca repetiria a chamada várias vezes antes de desistir)
     const c = chave ? await lerLocal(chave) : null;
@@ -145,7 +147,7 @@ async function todas(fabrica) {
 /** Chama a função do servidor. */
 async function fn(rota, corpo, metodo = "POST") {
   // Leituras do servidor (sem corpo) também ficam guardadas para uso offline
-  const chave = !corpo && ["/sugestoes", "/config"].includes(rota) ? "fn:" + rota : null;
+  const chave = !corpo && ["/sugestoes", "/config"].includes(rota) ? chaveCasa("fn") + rota : null;
   if (chave && !navigator.onLine) {
     const c = await lerLocal(chave);
     if (c) { marcarOffline(c.em); return c.dados; }
@@ -851,10 +853,11 @@ acoes.desvincular = async (el) => {
 };
 
 // ------------------------------------------------------------------ ESCANEAR
-const FILA = "filaNotas";
+/** Cada casa tem a sua fila (a casa 1 mantém o nome antigo). */
+const chaveFila = () => ((estado.casa?.casa_id ?? 1) === 1 ? "filaNotas" : `filaNotas:${estado.casa.casa_id}`);
 /** Fila de notas escaneadas sem internet: [{texto, em}] (versões antigas guardavam só o texto). */
 function lerFila() {
-  try { return JSON.parse(localStorage.getItem(FILA) ?? "[]").map((x) => (typeof x === "string" ? { texto: x, em: Date.now() } : x)); }
+  try { return JSON.parse(localStorage.getItem(chaveFila()) ?? "[]").map((x) => (typeof x === "string" ? { texto: x, em: Date.now() } : x)); }
   catch { return []; }
 }
 /** Número da nota a partir da chave de 44 dígitos do QR (para mostrar na fila). */
@@ -878,7 +881,7 @@ function cartaoFila(fila) {
     <ul class="lista">${fila.map((x) => `<li class="linha" style="cursor:default"><div class="corpo"><div class="titulo">${numeroDaChave(x.texto) ? `Nota nº ${esc(numeroDaChave(x.texto))}` : "Nota fiscal"}</div>
       <div class="meta">escaneada ${dataHora(new Date(x.em).toISOString())}</div></div></li>`).join("")}</ul></div>`;
 }
-function gravarFila(f) { try { localStorage.setItem(FILA, JSON.stringify(f)); } catch { /* sem armazenamento */ } }
+function gravarFila(f) { try { localStorage.setItem(chaveFila(), JSON.stringify(f)); } catch { /* sem armazenamento */ } }
 
 async function telaEscanear() {
   const fila = lerFila();
@@ -1274,6 +1277,49 @@ acoes.instalarApp = async () => {
   atualizarCartaoInstalar();
 };
 
+// ------------------------------------------------------------------ CASA
+// Cada casa tem os próprios dados. A casa aberta fica guardada para abrir offline.
+const CHAVE_CASA = "casaAberta";
+function lerCasaSalva() {
+  try {
+    const c = JSON.parse(localStorage.getItem(CHAVE_CASA) ?? "null");
+    return c && c.email === estado.email ? c : null;
+  } catch { return null; }
+}
+function guardarCasa(c) {
+  estado.casa = { ...c, email: estado.email };
+  try { localStorage.setItem(CHAVE_CASA, JSON.stringify(estado.casa)); } catch { /* sem armazenamento */ }
+}
+const ehRobo = (email) => /^robo-casa-/.test(email ?? "");
+
+acoes.renomearCasa = async () => {
+  const nome = $("#nomeCasa").value.trim();
+  if (!nome) return avisar("Dê um nome para a casa", true);
+  try {
+    await q(sb.from("casas").update({ nome }).eq("id", estado.casa.casa_id));
+    guardarCasa({ ...estado.casa, nome, casas: (estado.casa.casas ?? []).map((c) => (c.id === estado.casa.casa_id ? { ...c, nome } : c)) });
+    avisar("Nome salvo");
+    recarregar();
+  } catch (e) { avisar(e.message, true); }
+};
+acoes.abrirCasa = async (el) => {
+  try {
+    const r = await q(sb.rpc("trocar_casa", { p_casa: Number(el.dataset.id) }));
+    guardarCasa(r);
+    location.hash = "";
+    location.reload();
+  } catch (e) { avisar(e.message, true); }
+};
+acoes.sairDaCasa = async (el) => {
+  if (el.dataset.confirmar !== "1") { el.dataset.confirmar = "1"; el.textContent = "Confirmar saída"; return; }
+  try {
+    const r = await q(sb.rpc("sair_da_casa", { p_casa: estado.casa.casa_id }));
+    guardarCasa(r);
+    location.hash = "";
+    location.reload();
+  } catch (e) { avisar(e.message, true); }
+};
+
 async function telaMais() {
   app.innerHTML = `<div class="topo"><h1>Mais</h1></div><div id="conteudo">${carregando()}</div>`;
   const [cfg, itens, contas, logs, membros, regras] = await Promise.all([
@@ -1281,10 +1327,15 @@ async function telaMais() {
     q(sb.from("pluggy_itens").select("*").order("criado_em")),
     q(sb.from("contas").select("*").order("tipo").order("nome")),
     q(sb.from("sync_log").select("*").order("inicio", { ascending: false }).limit(8)),
-    q(sb.from("membros").select("*").order("criado_em")),
+    q(sb.from("membros").select("*").order("criado_em")).then((l) => l.filter((m) => !ehRobo(m.email))),
     q(sb.from("regras_categoria").select("id, alvo, tipo, padrao, origem, categoria_id").neq("origem", "sistema").order("criado_em", { ascending: false }).limit(200)),
   ]);
   const ultimo = logs[0];
+  if (navigator.onLine) {
+    const casas = await q(sb.rpc("minhas_casas")).catch(() => null);
+    if (casas) guardarCasa({ ...estado.casa, casas, nome: casas.find((c) => c.id === estado.casa.casa_id)?.nome ?? estado.casa.nome });
+  }
+  const casas = estado.casa.casas ?? [];
 
   $("#conteudo").innerHTML = `
     ${cartaoInstalar()}
@@ -1370,12 +1421,21 @@ async function telaMais() {
       ${cfg.anthropic_configurado ? `<button class="botao peq perigo" data-acao="removerIA">Remover</button>` : ""}</div>
     </div></details>
 
-    <details class="secao"><summary>Quem tem acesso (${membros.length})</summary><div class="conteudo">
-      <ul class="lista">${membros.map((m) => `<li class="linha" style="cursor:default"><div class="corpo"><div class="titulo">${esc(m.email)}</div></div>
+    <details class="secao" id="secaoCasa"><summary>Casa e convites · ${esc(estado.casa.nome ?? "")}</summary><div class="conteudo">
+      <label class="campo"><span>Nome da casa</span><input type="text" id="nomeCasa" value="${esc(estado.casa.nome ?? "")}" maxlength="60"></label>
+      <button class="botao peq" data-acao="renomearCasa">Salvar nome</button>
+      ${casas.length > 1 ? `<h3 style="margin:16px 0 4px">Suas casas</h3>
+      <ul class="lista">${casas.map((c) => `<li class="linha" style="cursor:default"><div class="corpo"><div class="titulo">${esc(c.nome)}</div>
+        <div class="meta">${c.membros} pessoa(s)</div></div>
+        ${c.id === estado.casa.casa_id ? `<span class="chip">aberta</span>` : `<button class="botao peq" data-acao="abrirCasa" data-id="${c.id}">Abrir</button>`}</li>`).join("")}</ul>` : ""}
+      <h3 style="margin:16px 0 4px">Quem tem acesso (${membros.length})</h3>
+      <ul class="lista">${membros.map((m) => `<li class="linha" style="cursor:default"><div class="corpo"><div class="titulo">${esc(m.email)}</div>
+        ${m.aceito_em ? "" : `<div class="meta">convite ainda não aceito</div>`}</div>
         ${m.email !== estado.email ? `<button class="botao peq perigo" data-acao="removerMembro" data-email="${esc(m.email)}">Remover</button>` : `<span class="chip">você</span>`}</li>`).join("")}</ul>
-      <label class="campo"><span>Adicionar e-mail</span><input type="email" id="novoMembro" placeholder="email@exemplo.com"></label>
-      <button class="botao peq" data-acao="adicionarMembro">Dar acesso</button>
-      <p class="nota-texto">A pessoa cria a conta no app com este e-mail e passa a ver os mesmos dados.</p>
+      <label class="campo"><span>Convidar por e-mail</span><input type="email" id="novoMembro" placeholder="email@exemplo.com"></label>
+      <button class="botao peq" data-acao="adicionarMembro">Convidar</button>
+      <p class="nota-texto">A pessoa entra no app com este e-mail (Google ou e-mail e senha) e passa a ver os dados desta casa. Quem entra sem convite ganha uma casa própria, vazia, com a Pluggy dela.</p>
+      ${membros.length > 1 ? `<button class="botao peq perigo" data-acao="sairDaCasa">Sair desta casa</button>` : ""}
     </div></details>
 
     <details class="secao"><summary>Histórico de sincronização</summary><div class="conteudo"><ul class="lista">
@@ -1507,13 +1567,13 @@ acoes.removerIA = async () => {
 acoes.adicionarMembro = async () => {
   const email = $("#novoMembro").value.trim().toLowerCase();
   if (!/^\S+@\S+\.\S+$/.test(email)) return avisar("E-mail inválido", true);
-  try { await q(sb.from("membros").insert({ email })); avisar("Acesso liberado"); recarregar(); } catch (e) { avisar(e.message, true); }
+  try { await q(sb.from("membros").insert({ email })); avisar("Convite registrado: é só a pessoa entrar no app com este e-mail"); recarregar(); } catch (e) { avisar(e.message, true); }
 };
 acoes.removerMembro = async (el) => {
   if (el.dataset.confirmar !== "1") { el.dataset.confirmar = "1"; el.textContent = "Confirmar"; return; }
   try { await q(sb.from("membros").delete().eq("email", el.dataset.email)); recarregar(); } catch (e) { avisar(e.message, true); }
 };
-acoes.sair = async () => { await apagarLocal(); try { localStorage.removeItem(CHAVE_BLOQUEIO); } catch { /* ok */ } await sb.auth.signOut().catch(() => {}); location.hash = ""; location.reload(); };
+acoes.sair = async () => { await apagarLocal(); try { localStorage.removeItem(CHAVE_BLOQUEIO); localStorage.removeItem(CHAVE_CASA); } catch { /* ok */ } await sb.auth.signOut().catch(() => {}); location.hash = ""; location.reload(); };
 
 // ------------------------------------------------------------------ PATRIMÔNIO
 // Investimentos (aplicações agrupadas em caixinhas) e dívidas.
@@ -2417,24 +2477,29 @@ async function iniciar() {
   if (bloqueioSalvo() && !desbloqueado) await exigirDesbloqueio();
   desbloqueado = true;
 
-  let membros = [], erroRede = false;
-  try { membros = await q(sb.from("membros").select("email")); }
-  catch (e) { erroRede = !navigator.onLine || /fetch|network|rede|timeout|internet/i.test(String(e?.message ?? e)); }
-  if (erroRede && !membros.length) {
-    // Sem internet e sem cópia guardada: não confundir com "acesso pendente": não confundir com "acesso pendente"
-    app.innerHTML = `<div class="login"><div class="cartao"><h2>Sem internet</h2>
-      <p>O app precisa de conexão para buscar os dados. Assim que a internet voltar, ele carrega sozinho.</p>
-      <button class="botao" data-acao="tentarDeNovo">Tentar de novo</button></div></div>`;
-    window.addEventListener("online", () => location.reload(), { once: true });
+  // Casa aberta: quem entra pela primeira vez ganha uma casa própria; quem foi convidado entra na casa de quem convidou
+  let casa = null, erroRede = !navigator.onLine || sessaoOffline, erroMsg = "";
+  if (!erroRede) {
+    try { casa = await q(sb.rpc("entrar")); }
+    catch (e) { erroMsg = String(e?.message ?? e); erroRede = ehErroDeRede(erroMsg) || /fetch|network|timeout|internet/i.test(erroMsg); }
+  }
+  if (!casa) {
+    const salva = lerCasaSalva();
+    if (salva && (erroRede || !erroMsg)) casa = salva;
+  }
+  if (!casa) {
+    app.innerHTML = erroRede
+      ? `<div class="login"><div class="cartao"><h2>Sem internet</h2>
+        <p>O app precisa de conexão para buscar os dados. Assim que a internet voltar, ele carrega sozinho.</p>
+        <button class="botao" data-acao="tentarDeNovo">Tentar de novo</button></div></div>`
+      : `<div class="login"><div class="cartao"><h2>Não foi possível abrir sua casa</h2>
+        <p class="nota-texto">${esc(erroMsg)}</p>
+        <button class="botao" data-acao="tentarDeNovo">Tentar de novo</button> <button class="botao sec" data-acao="sair">Sair</button></div></div>`;
+    if (erroRede) window.addEventListener("online", () => location.reload(), { once: true });
     return;
   }
-  if (!membros.length) {
-    app.innerHTML = `<div class="login"><div class="cartao"><h2>Acesso pendente</h2>
-      <p>Você entrou como <strong>${esc(estado.email)}</strong>, mas este e-mail ainda não tem acesso aos dados.</p>
-      <p class="nota-texto">Peça para quem já usa o app ir em Mais → Quem tem acesso e adicionar este e-mail.</p>
-      <button class="botao sec" data-acao="sair">Sair</button></div></div>`;
-    return;
-  }
+  guardarCasa(casa);
+  if (casa.convite_aceito) setTimeout(() => avisar(`Você agora participa da casa "${casa.nome}" (convite)`), 800);
   await carregarCategorias();
   abas.hidden = false;
   const inicial = location.hash.replace("#", "");

@@ -16,7 +16,8 @@
 //   POST /itens   {id, acao: "adicionar"|"remover"} · POST /descobrir-itens
 //   POST /pagar-divida {divida_id, transacao_id? | data+valor, aprender} · POST /sync-pagamentos
 
-import { createClient } from "npm:@supabase/supabase-js@2";
+import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { chaveAprendizado, dataBrasilia, normalizar } from "./lib/texto.ts";
 import { decodificarHtml, extrairDoPortal, infoDaChave, lerQr, urlsDeConsulta } from "./lib/nfce.ts";
 import {
@@ -35,7 +36,33 @@ import { montarMetas } from "./lib/metas.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-const db = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false } });
+const ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
+/** Cliente administrativo (ignora as regras de segurança): só para config, robôs e login. */
+const adm = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false } });
+
+// Cada requisição roda "dentro" de uma casa: o cliente usa o login de quem chamou (ou o robô
+// da casa, no agendamento), então as regras de segurança do banco limitam tudo à casa aberta.
+type Contexto = { db: SupabaseClient; casa: number };
+const contexto = new AsyncLocalStorage<Contexto>();
+const db: SupabaseClient = new Proxy({} as SupabaseClient, {
+  get(_alvo, prop) {
+    const c = contexto.getStore();
+    if (!c) throw new Error("Consulta fora do contexto de uma casa");
+    const v = (c.db as any)[prop];
+    return typeof v === "function" ? v.bind(c.db) : v;
+  },
+});
+function casaAtual(): number {
+  const c = contexto.getStore();
+  if (!c) throw new Error("Sem casa no contexto");
+  return c.casa;
+}
+function clienteComToken(token?: string): SupabaseClient {
+  return createClient(SUPABASE_URL, ANON_KEY, {
+    auth: { persistSession: false, autoRefreshToken: false },
+    ...(token ? { global: { headers: { Authorization: `Bearer ${token}` } } } : {}),
+  });
+}
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -79,30 +106,45 @@ function addDias(dia: string, n: number): string {
 
 // ------------------------------------------------------------------ config
 
-async function lerConfig(chaves: string[]): Promise<Record<string, string>> {
-  const linhas = ok(await db.from("app_config").select("chave, valor").in("chave", chaves)) as any[];
+/** Config global do app (segredo do agendamento, CDI…). */
+async function lerConfigGlobal(chaves: string[]): Promise<Record<string, string>> {
+  const linhas = ok(await adm.from("app_config").select("chave, valor").in("chave", chaves)) as any[];
   return Object.fromEntries(linhas.map((l) => [l.chave, l.valor]));
 }
-
-async function gravarConfig(chave: string, valor: string | null) {
-  if (valor == null || valor === "") {
-    ok(await db.from("app_config").delete().eq("chave", chave));
-  } else {
-    ok(await db.from("app_config").upsert({ chave, valor, atualizado_em: new Date().toISOString() }));
-  }
+async function gravarConfigGlobal(chave: string, valor: string) {
+  ok(await adm.from("app_config").upsert({ chave, valor, atualizado_em: new Date().toISOString() }));
 }
 
-let cacheCategorias: { porNome: Record<string, number>; porId: Record<number, any>; nomes: string[] } | null = null;
-async function categorias() {
-  if (!cacheCategorias) {
+/** Chaves privadas de uma casa (Pluggy, Anthropic, senha do robô). */
+async function lerConfigDe(casa: number, chaves: string[]): Promise<Record<string, string>> {
+  const linhas = ok(await adm.from("casa_config").select("chave, valor").eq("casa_id", casa).in("chave", chaves)) as any[];
+  return Object.fromEntries(linhas.map((l) => [l.chave, l.valor]));
+}
+async function gravarConfigDe(casa: number, chave: string, valor: string | null) {
+  if (valor == null || valor === "") {
+    ok(await adm.from("casa_config").delete().eq("casa_id", casa).eq("chave", chave));
+  } else {
+    ok(await adm.from("casa_config").upsert({ casa_id: casa, chave, valor, atualizado_em: new Date().toISOString() }, { onConflict: "casa_id,chave" }));
+  }
+}
+const lerConfig = (chaves: string[]) => lerConfigDe(casaAtual(), chaves);
+const gravarConfig = (chave: string, valor: string | null) => gravarConfigDe(casaAtual(), chave, valor);
+
+type CacheCategorias = { porNome: Record<string, number>; porId: Record<number, any>; nomes: string[] };
+const cacheCategorias = new Map<number, CacheCategorias>();
+async function categorias(): Promise<CacheCategorias> {
+  const casa = casaAtual();
+  let c = cacheCategorias.get(casa);
+  if (!c) {
     const lista = ok(await db.from("categorias").select("id, nome, conta_como_gasto, ativa")) as any[];
-    cacheCategorias = {
+    c = {
       porNome: Object.fromEntries(lista.map((c) => [c.nome, c.id])),
       porId: Object.fromEntries(lista.map((c) => [c.id, c])),
       nomes: lista.filter((c) => c.ativa && c.conta_como_gasto).map((c) => c.nome),
     };
+    cacheCategorias.set(casa, c);
   }
-  return cacheCategorias;
+  return c;
 }
 
 async function regras(): Promise<RegraCompilada[]> {
@@ -128,21 +170,70 @@ function textoTx(t: { descricao: string; recebedor_nome?: string | null }) {
 
 // ------------------------------------------------------------------ auth
 
-async function autorizar(req: Request, rota: string): Promise<{ email: string | null; cron: boolean }> {
+type Quem = { email: string | null; cron: boolean; db?: SupabaseClient; casa?: number };
+
+async function autorizar(req: Request, rota: string): Promise<Quem> {
   const segredo = req.headers.get("x-cron-secret");
   if (segredo) {
-    const c = await lerConfig(["cron_secret"]);
+    const c = await lerConfigGlobal(["cron_secret"]);
     if (c.cron_secret && segredo === c.cron_secret && ["/sync", "/recategorizar", "/sugestoes", "/metas"].includes(rota)) return { email: null, cron: true };
     throw new HttpErro(401, "Segredo inválido");
   }
   const token = (req.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "");
   if (!token) throw new HttpErro(401, "Faça login no app");
-  const { data, error } = await db.auth.getUser(token);
+  const { data, error } = await adm.auth.getUser(token);
   const email = data?.user?.email?.toLowerCase();
   if (error || !email) throw new HttpErro(401, "Sessão expirada, faça login de novo");
-  const m = ok(await db.from("membros").select("email").eq("email", email).maybeSingle());
-  if (!m) throw new HttpErro(403, `O e-mail ${email} não está autorizado neste app`);
-  return { email, cron: false };
+  const cli = clienteComToken(token);
+  let casa = ok(await cli.rpc("casa_atual")) as number | null;
+  if (!casa) casa = (ok(await cli.rpc("entrar")) as any).casa_id as number;
+  return { email, cron: false, db: cli, casa };
+}
+
+// ------------------------------------------------------------------ robô de cada casa (agendamento)
+
+const emailRobo = (casa: number) => `robo-casa-${casa}@financas-casa.app`;
+
+/** Login do "robô" da casa: um usuário técnico, membro só dela, usado pela sincronização agendada. */
+async function clienteRobo(casa: number): Promise<SupabaseClient> {
+  const email = emailRobo(casa);
+  let senha = (await lerConfigDe(casa, ["robo_senha"])).robo_senha;
+  if (senha) {
+    const c = clienteComToken();
+    if (!(await c.auth.signInWithPassword({ email, password: senha })).error) return c;
+  }
+  senha = crypto.randomUUID() + crypto.randomUUID();
+  const criado = await adm.auth.admin.createUser({ email, password: senha, email_confirm: true });
+  if (criado.error) {
+    // Já existe (ex.: senha perdida): procura e define uma senha nova
+    let id: string | null = null;
+    for (let page = 1; page <= 50 && !id; page++) {
+      const { data } = await adm.auth.admin.listUsers({ page, perPage: 200 });
+      id = data?.users?.find((u) => u.email?.toLowerCase() === email)?.id ?? null;
+      if (!data?.users || data.users.length < 200) break;
+    }
+    if (!id) throw new HttpErro(500, `Não foi possível criar o robô da casa ${casa}: ${criado.error.message}`);
+    ok(await adm.auth.admin.updateUserById(id, { password: senha }) as any);
+  }
+  await gravarConfigDe(casa, "robo_senha", senha);
+  ok(await adm.from("membros").upsert({ casa_id: casa, email, aceito_em: new Date().toISOString() }, { onConflict: "casa_id,email", ignoreDuplicates: true }));
+  ok(await adm.from("usuarios").upsert({ email, casa_id: casa, atualizado_em: new Date().toISOString() }, { onConflict: "email" }));
+  const c = clienteComToken();
+  const r = await c.auth.signInWithPassword({ email, password: senha });
+  if (r.error) throw new HttpErro(500, `Login do robô da casa ${casa} falhou: ${r.error.message}`);
+  return c;
+}
+
+async function naCasaDoRobo<T>(casa: number, fn: () => Promise<T>): Promise<T> {
+  const cli = await clienteRobo(casa);
+  try { return await contexto.run({ db: cli, casa }, fn); }
+  finally { await cli.auth.signOut().catch(() => {}); }
+}
+
+/** Casas com Open Finance configurado (para a sincronização agendada). */
+async function casasComPluggy(): Promise<number[]> {
+  const linhas = ok(await adm.from("casa_config").select("casa_id").eq("chave", "pluggy_client_secret")) as any[];
+  return [...new Set(linhas.map((l) => Number(l.casa_id)))].sort((a, b) => a - b);
 }
 
 // ------------------------------------------------------------------ categorização de itens
@@ -176,7 +267,7 @@ async function categorizarItens(
           }
         });
         if (novasRegras.length) {
-          await db.from("regras_categoria").upsert(novasRegras, { onConflict: "alvo,tipo,padrao", ignoreDuplicates: true });
+          await db.from("regras_categoria").upsert(novasRegras.map((r) => ({ ...r, casa_id: casaAtual() })), { onConflict: "casa_id,alvo,tipo,padrao", ignoreDuplicates: true });
         }
       } catch (e) {
         console.warn("IA falhou:", e);
@@ -578,7 +669,7 @@ async function reconhecerPagamentosDeDividas(): Promise<number> {
 
 /** CDI anualizado do Banco Central (série SGS 4389), guardado por um dia. */
 async function cdiAnual(): Promise<number> {
-  const c = await lerConfig(["cdi_anual", "cdi_data"]);
+  const c = await lerConfigGlobal(["cdi_anual", "cdi_data"]);
   const hoje = hojeBrasilia();
   if (c.cdi_anual && c.cdi_data === hoje) return Number(c.cdi_anual);
   try {
@@ -586,8 +677,8 @@ async function cdiAnual(): Promise<number> {
     const j = await r.json();
     const v = Number(String(j?.[0]?.valor ?? "").replace(",", "."));
     if (Number.isFinite(v) && v > 0) {
-      await gravarConfig("cdi_anual", String(v));
-      await gravarConfig("cdi_data", hoje);
+      await gravarConfigGlobal("cdi_anual", String(v));
+      await gravarConfigGlobal("cdi_data", hoje);
       return v;
     }
   } catch { /* usa o último valor conhecido */ }
@@ -834,7 +925,7 @@ async function sincronizarConta(apiKey: string, conta: any, rg: RegraCompilada[]
 // ------------------------------------------------------------------ recategorizar
 
 async function recategorizar() {
-  cacheCategorias = null;
+  cacheCategorias.delete(casaAtual());
   const rg = await regras();
   const cats = await categorias();
   const cart = await carteiras();
@@ -872,6 +963,185 @@ async function recategorizar() {
 
 // ------------------------------------------------------------------ servidor
 
+async function rotear(rota: string, req: Request, corpo: any, quem: Quem): Promise<Response> {
+  switch (rota) {
+    case "/nfce":
+      return json(await processarQr(String(corpo.texto ?? corpo.url ?? ""), quem.email));
+
+    case "/nfce/reconsultar": {
+      await consultarSefaz(corpo.nota_id);
+      await vincularNota(corpo.nota_id);
+      return json(await detalheNota(corpo.nota_id));
+    }
+
+    case "/nota":
+      return json(await detalheNota(corpo.nota_id));
+
+    case "/candidatos":
+      return json({ candidatos: await candidatosDetalhados(corpo.nota_id) });
+
+    case "/vincular": {
+      ok(await db.from("nota_transacao").upsert(
+        { nota_id: corpo.nota_id, transacao_id: corpo.transacao_id, origem: "manual" },
+        { onConflict: "nota_id,transacao_id" },
+      ));
+      ok(await db.from("notas").update({ vinculo_status: "vinculada" }).eq("id", corpo.nota_id));
+      await atualizarCategoriaPelaNota(corpo.transacao_id);
+      await propagarParcelas();
+      return json({ ok: true });
+    }
+
+    case "/desvincular": {
+      ok(await db.from("nota_transacao").delete().eq("nota_id", corpo.nota_id).eq("transacao_id", corpo.transacao_id));
+      const resta = ok(await db.from("nota_transacao").select("transacao_id").eq("nota_id", corpo.nota_id)) as any[];
+      if (!resta.length) ok(await db.from("notas").update({ vinculo_status: "confirmar" }).eq("id", corpo.nota_id));
+      // Volta a categoria do gasto para as regras
+      const tx = ok(await db.from("transacoes").select("*, contas(tipo)").eq("id", corpo.transacao_id).single()) as any;
+      if (tx.categoria_origem === "nota") {
+        const r = categorizarTransacao({ ...tx, conta_tipo: tx.contas?.tipo }, await regras(), (await categorias()).porNome, await carteiras());
+        ok(await db.from("transacoes").update({ categoria_id: r?.categoria_id ?? null, categoria_origem: r?.origem ?? null }).eq("id", tx.id));
+      }
+      await atualizarCategoriaPelaNota(corpo.transacao_id);
+      return json({ ok: true });
+    }
+
+    case "/ignorar-nota": {
+      const status = corpo.ignorar ? "ignorada" : "pendente";
+      ok(await db.from("notas").update({ vinculo_status: status }).eq("id", corpo.nota_id));
+      if (!corpo.ignorar) await vincularNota(corpo.nota_id);
+      return json({ ok: true });
+    }
+
+    case "/categorizar-item": {
+      const item = ok(await db.from("nota_itens").select("id, descricao, descricao_norm, nota_id").eq("id", corpo.item_id).single()) as any;
+      ok(await db.from("nota_itens").update({ categoria_id: corpo.categoria_id, categoria_origem: "manual" }).eq("id", item.id));
+      const afetadas = new Set<string>([item.nota_id]);
+      if (corpo.aprender !== false) {
+        ok(await db.from("regras_categoria").upsert({
+          casa_id: casaAtual(), alvo: "item", tipo: "exato", padrao: item.descricao_norm, categoria_id: corpo.categoria_id, prioridade: 1, origem: "aprendida",
+        }, { onConflict: "casa_id,alvo,tipo,padrao" }));
+        const iguais = ok(await db.from("nota_itens").update({ categoria_id: corpo.categoria_id, categoria_origem: "aprendida" })
+          .eq("descricao_norm", item.descricao_norm).or("categoria_origem.is.null,categoria_origem.neq.manual").select("nota_id")) as any[];
+        iguais.forEach((i) => afetadas.add(i.nota_id));
+      }
+      const links = ok(await db.from("nota_transacao").select("transacao_id").in("nota_id", [...afetadas])) as any[];
+      for (const l of links) await atualizarCategoriaPelaNota(l.transacao_id);
+      return json({ ok: true, notas_afetadas: afetadas.size });
+    }
+
+    case "/categorizar-transacao": {
+      const tx = ok(await db.from("transacoes").select("id, descricao, recebedor_nome, sentido").eq("id", corpo.transacao_id).single()) as any;
+      ok(await db.from("transacoes").update({ categoria_id: corpo.categoria_id, categoria_origem: "manual" }).eq("id", tx.id));
+      let outros = 0;
+      if (corpo.aprender) {
+        const chave = chaveAprendizado(textoTx(tx));
+        ok(await db.from("regras_categoria").upsert({
+          casa_id: casaAtual(), alvo: "transacao", tipo: "exato", padrao: chave, categoria_id: corpo.categoria_id, prioridade: 1, origem: "aprendida", sentido: tx.sentido,
+        }, { onConflict: "casa_id,alvo,tipo,padrao" }));
+        const candidatos = await todos((de, ate) => db.from("transacoes").select("id, descricao, recebedor_nome")
+          .eq("removida", false).eq("sentido", tx.sentido).or("categoria_origem.is.null,categoria_origem.not.in.(manual,nota)").range(de, ate)) as any[];
+        const alvo = candidatos.filter((t) => t.id !== tx.id && chaveAprendizado(textoTx(t)) === chave).map((t) => t.id);
+        for (let i = 0; i < alvo.length; i += 200) {
+          ok(await db.from("transacoes").update({ categoria_id: corpo.categoria_id, categoria_origem: "aprendida" }).in("id", alvo.slice(i, i + 200)));
+        }
+        outros = alvo.length;
+      }
+      return json({ ok: true, outros_atualizados: outros });
+    }
+
+    case "/pagar-divida": {
+      // Liga um lançamento (ou valor avulso) a uma dívida; opcionalmente aprende o texto do extrato.
+      const divida = ok(await db.from("dividas").select("id, padrao_pagamento").eq("id", corpo.divida_id).single()) as any;
+      let data = corpo.data, valor = corpo.valor;
+      if (corpo.transacao_id) {
+        const tx = ok(await db.from("transacoes").select("id, data, valor, descricao, recebedor_nome").eq("id", corpo.transacao_id).single()) as any;
+        data = tx.data; valor = Number(tx.valor);
+        if (corpo.aprender && !divida.padrao_pagamento) {
+          ok(await db.from("dividas").update({ padrao_pagamento: chaveAprendizado(textoTx(tx)) }).eq("id", divida.id));
+        }
+        const cat = (await categorias()).porNome["Pagamento de dívida"];
+        if (cat) ok(await db.from("transacoes").update({ categoria_id: cat, categoria_origem: "manual" }).eq("id", tx.id));
+      }
+      if (!data || !valor) throw new HttpErro(400, "Informe data e valor do pagamento");
+      ok(await db.from("divida_pagamentos").upsert(
+        { divida_id: divida.id, data, valor, transacao_id: corpo.transacao_id ?? null, observacao: corpo.observacao ?? null },
+        { onConflict: "transacao_id" },
+      ));
+      const outros = corpo.aprender ? await reconhecerPagamentosDeDividas() : 0;
+      return json({ ok: true, outros_reconhecidos: outros });
+    }
+
+    case "/sugestoes":
+      return json(await montarSugestoes());
+
+    case "/metas":
+      return json(await dadosEMetas());
+
+    case "/sync-pagamentos":
+      return json({ pagamentos: await reconhecerPagamentosDeDividas() });
+
+    case "/recategorizar":
+      return json(await recategorizar());
+
+    case "/sync":
+      return json(await sincronizar(quem.cron ? "agendado" : `app (${quem.email})`));
+
+    case "/config": {
+      if (req.method === "POST") {
+        if ("pluggy_client_id" in corpo) await gravarConfig("pluggy_client_id", String(corpo.pluggy_client_id ?? "").trim());
+        if ("pluggy_client_secret" in corpo) await gravarConfig("pluggy_client_secret", String(corpo.pluggy_client_secret ?? "").trim());
+        if ("anthropic_key" in corpo) await gravarConfig("anthropic_key", String(corpo.anthropic_key ?? "").trim());
+      }
+      const c = await lerConfig(["pluggy_client_id", "pluggy_client_secret", "anthropic_key"]);
+      let pluggyOk: boolean | null = null, pluggyErro: string | null = null;
+      if (req.method === "POST" && c.pluggy_client_id && c.pluggy_client_secret) {
+        try { await autenticar(c.pluggy_client_id, c.pluggy_client_secret); pluggyOk = true; }
+        catch (e) { pluggyOk = false; pluggyErro = e instanceof Error ? e.message : String(e); }
+      }
+      return json({
+        pluggy_configurado: !!(c.pluggy_client_id && c.pluggy_client_secret),
+        pluggy_client_id_fim: c.pluggy_client_id ? c.pluggy_client_id.slice(-4) : null,
+        pluggy_teste: pluggyOk, pluggy_erro: pluggyErro,
+        anthropic_configurado: !!c.anthropic_key,
+      });
+    }
+
+    case "/itens": {
+      const id = String(corpo.id ?? "").trim();
+      if (!id) throw new HttpErro(400, "Informe o ID da conexão");
+      if (corpo.acao === "remover") {
+        ok(await db.from("pluggy_itens").delete().eq("id", id));
+        return json({ ok: true });
+      }
+      const cfg = await lerConfig(["pluggy_client_id", "pluggy_client_secret"]);
+      if (!cfg.pluggy_client_id) throw new HttpErro(400, "Configure primeiro as credenciais da Pluggy");
+      const apiKey = await autenticar(cfg.pluggy_client_id, cfg.pluggy_client_secret);
+      const item = await obterItem(apiKey, id).catch(() => {
+        throw new HttpErro(400, "A Pluggy não encontrou essa conexão. Confira o ID (formato xxxxxxxx-xxxx-…).");
+      });
+      ok(await db.from("pluggy_itens").upsert({ id, conector: item.connector?.name, status: item.status }, { onConflict: "id" }));
+      return json({ ok: true, conector: item.connector?.name, status: item.status });
+    }
+
+    case "/descobrir-itens": {
+      const cfg = await lerConfig(["pluggy_client_id", "pluggy_client_secret"]);
+      const apiKey = await autenticar(cfg.pluggy_client_id, cfg.pluggy_client_secret);
+      try {
+        const itens = await listarItens(apiKey);
+        if (itens.length) {
+          ok(await db.from("pluggy_itens").upsert(itens.map((i) => ({ id: i.id, conector: i.connector?.name, status: i.status })), { onConflict: "id" }));
+        }
+        return json({ encontrados: itens.length });
+      } catch {
+        return json({ encontrados: 0, aviso: "A Pluggy não liberou a listagem automática; informe o ID manualmente." });
+      }
+    }
+
+    default:
+      throw new HttpErro(404, `Rota desconhecida: ${rota}`);
+  }
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
   const url = new URL(req.url);
@@ -882,182 +1152,20 @@ Deno.serve(async (req) => {
     const quem = await autorizar(req, rota);
     const corpo: any = req.method === "POST" ? await req.json().catch(() => ({})) : {};
 
-    switch (rota) {
-      case "/nfce":
-        return json(await processarQr(String(corpo.texto ?? corpo.url ?? ""), quem.email));
-
-      case "/nfce/reconsultar": {
-        await consultarSefaz(corpo.nota_id);
-        await vincularNota(corpo.nota_id);
-        return json(await detalheNota(corpo.nota_id));
-      }
-
-      case "/nota":
-        return json(await detalheNota(corpo.nota_id));
-
-      case "/candidatos":
-        return json({ candidatos: await candidatosDetalhados(corpo.nota_id) });
-
-      case "/vincular": {
-        ok(await db.from("nota_transacao").upsert(
-          { nota_id: corpo.nota_id, transacao_id: corpo.transacao_id, origem: "manual" },
-          { onConflict: "nota_id,transacao_id" },
-        ));
-        ok(await db.from("notas").update({ vinculo_status: "vinculada" }).eq("id", corpo.nota_id));
-        await atualizarCategoriaPelaNota(corpo.transacao_id);
-        await propagarParcelas();
-        return json({ ok: true });
-      }
-
-      case "/desvincular": {
-        ok(await db.from("nota_transacao").delete().eq("nota_id", corpo.nota_id).eq("transacao_id", corpo.transacao_id));
-        const resta = ok(await db.from("nota_transacao").select("transacao_id").eq("nota_id", corpo.nota_id)) as any[];
-        if (!resta.length) ok(await db.from("notas").update({ vinculo_status: "confirmar" }).eq("id", corpo.nota_id));
-        // Volta a categoria do gasto para as regras
-        const tx = ok(await db.from("transacoes").select("*, contas(tipo)").eq("id", corpo.transacao_id).single()) as any;
-        if (tx.categoria_origem === "nota") {
-          const r = categorizarTransacao({ ...tx, conta_tipo: tx.contas?.tipo }, await regras(), (await categorias()).porNome, await carteiras());
-          ok(await db.from("transacoes").update({ categoria_id: r?.categoria_id ?? null, categoria_origem: r?.origem ?? null }).eq("id", tx.id));
+    if (quem.cron) {
+      // Agendamento: sincroniza cada casa com Open Finance configurado, como o robô daquela casa
+      if (rota === "/sync") {
+        const casas = corpo.casa ? [Number(corpo.casa)] : await casasComPluggy();
+        const resultados: any[] = [];
+        for (const casa of casas) {
+          try { resultados.push({ casa, ...(await naCasaDoRobo(casa, () => sincronizar("agendado"))) }); }
+          catch (e) { resultados.push({ casa, erro: e instanceof Error ? e.message : String(e) }); }
         }
-        await atualizarCategoriaPelaNota(corpo.transacao_id);
-        return json({ ok: true });
+        return json({ casas: resultados });
       }
-
-      case "/ignorar-nota": {
-        const status = corpo.ignorar ? "ignorada" : "pendente";
-        ok(await db.from("notas").update({ vinculo_status: status }).eq("id", corpo.nota_id));
-        if (!corpo.ignorar) await vincularNota(corpo.nota_id);
-        return json({ ok: true });
-      }
-
-      case "/categorizar-item": {
-        const item = ok(await db.from("nota_itens").select("id, descricao, descricao_norm, nota_id").eq("id", corpo.item_id).single()) as any;
-        ok(await db.from("nota_itens").update({ categoria_id: corpo.categoria_id, categoria_origem: "manual" }).eq("id", item.id));
-        const afetadas = new Set<string>([item.nota_id]);
-        if (corpo.aprender !== false) {
-          ok(await db.from("regras_categoria").upsert({
-            alvo: "item", tipo: "exato", padrao: item.descricao_norm, categoria_id: corpo.categoria_id, prioridade: 1, origem: "aprendida",
-          }, { onConflict: "alvo,tipo,padrao" }));
-          const iguais = ok(await db.from("nota_itens").update({ categoria_id: corpo.categoria_id, categoria_origem: "aprendida" })
-            .eq("descricao_norm", item.descricao_norm).or("categoria_origem.is.null,categoria_origem.neq.manual").select("nota_id")) as any[];
-          iguais.forEach((i) => afetadas.add(i.nota_id));
-        }
-        const links = ok(await db.from("nota_transacao").select("transacao_id").in("nota_id", [...afetadas])) as any[];
-        for (const l of links) await atualizarCategoriaPelaNota(l.transacao_id);
-        return json({ ok: true, notas_afetadas: afetadas.size });
-      }
-
-      case "/categorizar-transacao": {
-        const tx = ok(await db.from("transacoes").select("id, descricao, recebedor_nome, sentido").eq("id", corpo.transacao_id).single()) as any;
-        ok(await db.from("transacoes").update({ categoria_id: corpo.categoria_id, categoria_origem: "manual" }).eq("id", tx.id));
-        let outros = 0;
-        if (corpo.aprender) {
-          const chave = chaveAprendizado(textoTx(tx));
-          ok(await db.from("regras_categoria").upsert({
-            alvo: "transacao", tipo: "exato", padrao: chave, categoria_id: corpo.categoria_id, prioridade: 1, origem: "aprendida", sentido: tx.sentido,
-          }, { onConflict: "alvo,tipo,padrao" }));
-          const candidatos = await todos((de, ate) => db.from("transacoes").select("id, descricao, recebedor_nome")
-            .eq("removida", false).eq("sentido", tx.sentido).or("categoria_origem.is.null,categoria_origem.not.in.(manual,nota)").range(de, ate)) as any[];
-          const alvo = candidatos.filter((t) => t.id !== tx.id && chaveAprendizado(textoTx(t)) === chave).map((t) => t.id);
-          for (let i = 0; i < alvo.length; i += 200) {
-            ok(await db.from("transacoes").update({ categoria_id: corpo.categoria_id, categoria_origem: "aprendida" }).in("id", alvo.slice(i, i + 200)));
-          }
-          outros = alvo.length;
-        }
-        return json({ ok: true, outros_atualizados: outros });
-      }
-
-      case "/pagar-divida": {
-        // Liga um lançamento (ou valor avulso) a uma dívida; opcionalmente aprende o texto do extrato.
-        const divida = ok(await db.from("dividas").select("id, padrao_pagamento").eq("id", corpo.divida_id).single()) as any;
-        let data = corpo.data, valor = corpo.valor;
-        if (corpo.transacao_id) {
-          const tx = ok(await db.from("transacoes").select("id, data, valor, descricao, recebedor_nome").eq("id", corpo.transacao_id).single()) as any;
-          data = tx.data; valor = Number(tx.valor);
-          if (corpo.aprender && !divida.padrao_pagamento) {
-            ok(await db.from("dividas").update({ padrao_pagamento: chaveAprendizado(textoTx(tx)) }).eq("id", divida.id));
-          }
-          const cat = (await categorias()).porNome["Pagamento de dívida"];
-          if (cat) ok(await db.from("transacoes").update({ categoria_id: cat, categoria_origem: "manual" }).eq("id", tx.id));
-        }
-        if (!data || !valor) throw new HttpErro(400, "Informe data e valor do pagamento");
-        ok(await db.from("divida_pagamentos").upsert(
-          { divida_id: divida.id, data, valor, transacao_id: corpo.transacao_id ?? null, observacao: corpo.observacao ?? null },
-          { onConflict: "transacao_id" },
-        ));
-        const outros = corpo.aprender ? await reconhecerPagamentosDeDividas() : 0;
-        return json({ ok: true, outros_reconhecidos: outros });
-      }
-
-      case "/sugestoes":
-        return json(await montarSugestoes());
-
-      case "/metas":
-        return json(await dadosEMetas());
-
-      case "/sync-pagamentos":
-        return json({ pagamentos: await reconhecerPagamentosDeDividas() });
-
-      case "/recategorizar":
-        return json(await recategorizar());
-
-      case "/sync":
-        return json(await sincronizar(quem.cron ? "agendado" : `app (${quem.email})`));
-
-      case "/config": {
-        if (req.method === "POST") {
-          if ("pluggy_client_id" in corpo) await gravarConfig("pluggy_client_id", String(corpo.pluggy_client_id ?? "").trim());
-          if ("pluggy_client_secret" in corpo) await gravarConfig("pluggy_client_secret", String(corpo.pluggy_client_secret ?? "").trim());
-          if ("anthropic_key" in corpo) await gravarConfig("anthropic_key", String(corpo.anthropic_key ?? "").trim());
-        }
-        const c = await lerConfig(["pluggy_client_id", "pluggy_client_secret", "anthropic_key"]);
-        let pluggyOk: boolean | null = null, pluggyErro: string | null = null;
-        if (req.method === "POST" && c.pluggy_client_id && c.pluggy_client_secret) {
-          try { await autenticar(c.pluggy_client_id, c.pluggy_client_secret); pluggyOk = true; }
-          catch (e) { pluggyOk = false; pluggyErro = e instanceof Error ? e.message : String(e); }
-        }
-        return json({
-          pluggy_configurado: !!(c.pluggy_client_id && c.pluggy_client_secret),
-          pluggy_client_id_fim: c.pluggy_client_id ? c.pluggy_client_id.slice(-4) : null,
-          pluggy_teste: pluggyOk, pluggy_erro: pluggyErro,
-          anthropic_configurado: !!c.anthropic_key,
-        });
-      }
-
-      case "/itens": {
-        const id = String(corpo.id ?? "").trim();
-        if (!id) throw new HttpErro(400, "Informe o ID da conexão");
-        if (corpo.acao === "remover") {
-          ok(await db.from("pluggy_itens").delete().eq("id", id));
-          return json({ ok: true });
-        }
-        const cfg = await lerConfig(["pluggy_client_id", "pluggy_client_secret"]);
-        if (!cfg.pluggy_client_id) throw new HttpErro(400, "Configure primeiro as credenciais da Pluggy");
-        const apiKey = await autenticar(cfg.pluggy_client_id, cfg.pluggy_client_secret);
-        const item = await obterItem(apiKey, id).catch(() => {
-          throw new HttpErro(400, "A Pluggy não encontrou essa conexão. Confira o ID (formato xxxxxxxx-xxxx-…).");
-        });
-        ok(await db.from("pluggy_itens").upsert({ id, conector: item.connector?.name, status: item.status }, { onConflict: "id" }));
-        return json({ ok: true, conector: item.connector?.name, status: item.status });
-      }
-
-      case "/descobrir-itens": {
-        const cfg = await lerConfig(["pluggy_client_id", "pluggy_client_secret"]);
-        const apiKey = await autenticar(cfg.pluggy_client_id, cfg.pluggy_client_secret);
-        try {
-          const itens = await listarItens(apiKey);
-          if (itens.length) {
-            ok(await db.from("pluggy_itens").upsert(itens.map((i) => ({ id: i.id, conector: i.connector?.name, status: i.status })), { onConflict: "id" }));
-          }
-          return json({ encontrados: itens.length });
-        } catch {
-          return json({ encontrados: 0, aviso: "A Pluggy não liberou a listagem automática; informe o ID manualmente." });
-        }
-      }
-
-      default:
-        throw new HttpErro(404, `Rota desconhecida: ${rota}`);
+      return await naCasaDoRobo(Number(corpo.casa ?? 1), () => rotear(rota, req, corpo, quem));
     }
+    return await contexto.run({ db: quem.db!, casa: quem.casa! }, () => rotear(rota, req, corpo, quem));
   } catch (e) {
     const status = e instanceof HttpErro ? e.status : 500;
     const msg = e instanceof Error ? e.message : String(e);
