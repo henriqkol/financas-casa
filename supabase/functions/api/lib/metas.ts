@@ -108,7 +108,8 @@ export function montarMetas(d: DadosMetas) {
     // entre "um pagamento" e "todos somados", fica o que chega mais perto do valor da conta
     const usados = unico && !(todosServem && Math.abs(somaTodos - i.valor) < Math.abs(unico.valor - i.valor)) ? [unico] : todosServem ? candidatos : [];
     const pagoTotal = arred(usados.reduce((s, t) => s + t.valor, 0));
-    const quitada = !!unico || (usados.length > 0 && pagoTotal >= i.valor * 0.9);
+    // Paga quando o que saiu chega a 60% do previsto (o valor real pode variar; a tela mostra quanto foi)
+    const quitada = !!unico || (usados.length > 0 && pagoTotal >= i.valor * 0.6);
     if (quitada) usados.forEach((t) => usadas.add(t.id));
     const data = i.dia_vencimento ? `${mes}-${String(Math.min(i.dia_vencimento, 28)).padStart(2, "0")}` : null;
     const antesDoPlano = !!d.inicio_plano && mes < mesDe(d.inicio_plano);

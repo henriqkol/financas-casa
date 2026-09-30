@@ -563,3 +563,12 @@ test("categorização: Pix para a própria conta PicPay é assinatura; para terc
   const outro = { ...eu, descricao: "Transferência enviada|Ricardo Silva Reis", recebedor_doc: "11122233344" };
   assert.notEqual(categorizarTransacao(outro, regras, porNome, cart)?.categoria_id, porNome["Assinaturas"]);
 });
+
+test("metas: pagamento abaixo do previsto (mas acima de 60%) conta como pago", () => {
+  const base: any = dadosMetas({ hoje: "2026-09-30", inicio_plano: "2026-10-01" });
+  base.grupos[0].itens.push({ id: 12, nome: "PicPay", valor: 316.99, periodicidade_meses: 1, tipo: "conta", dia_vencimento: 5, forma_pagamento: null, padrao: "PICPAY", observacao: null });
+  base.saidas_mes = [{ id: "p", data: "2026-09-15", valor: 210, texto: "Transferência enviada|Henrique Kolling Limberger PICPAY" }];
+  const c = montarMetas(base).contas.find((x: any) => x.nome === "PicPay")!;
+  assert.equal(c.status, "pago");
+  assert.equal(c.pago_valor, 210);
+});
