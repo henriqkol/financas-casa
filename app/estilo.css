@@ -274,3 +274,10 @@ body.oculto .priv-aviso { display: block; margin: 8px 0 0; }
 .botao-google { width: 100%; margin-bottom: 4px; }
 .separador { display: flex; align-items: center; gap: 10px; margin: 14px 0 10px; color: var(--texto-3); font-size: 12.5px; }
 .separador::before, .separador::after { content: ""; flex: 1; border-top: 1px solid var(--borda); }
+
+/* Bloqueio com biometria */
+body.bloqueado #app, body.bloqueado #abas, body.bloqueado #offline { display: none !important; }
+#telaBloqueio { min-height: 100vh; }
+body.fundo-privado #app { filter: blur(18px); }
+.icone-cadeado { width: 56px; height: 56px; margin: 4px auto 0; border-radius: 50%; background: var(--acento-2); color: var(--acento); display: flex; align-items: center; justify-content: center; }
+.icone-cadeado svg { width: 28px; height: 28px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }

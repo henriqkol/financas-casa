@@ -1020,6 +1020,118 @@ acoes.excluirNota = async (el) => {
 };
 
 // ------------------------------------------------------------------ MAIS
+// ------------------------------------------------------------------ bloqueio com biometria (WebAuthn)
+// Usa o leitor do próprio aparelho (digital, rosto ou PIN/padrão da tela). A credencial fica no
+// aparelho; o app só guarda o identificador dela. É uma trava local: o login (Supabase) continua valendo.
+const CHAVE_BLOQUEIO = "bloqueioBiometria";
+const TEMPO_FORA = 60 * 1000;               // fora do app por mais de 1 min → pede de novo
+function bloqueioSalvo() { try { return JSON.parse(localStorage.getItem(CHAVE_BLOQUEIO) ?? "null"); } catch { return null; } }
+const b64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+const deB64 = (s) => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
+const aleatorio = (n) => crypto.getRandomValues(new Uint8Array(n));
+async function biometriaDisponivel() {
+  try { return !!window.PublicKeyCredential && await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable(); }
+  catch { return false; }
+}
+async function verificarBiometria() {
+  const salvo = bloqueioSalvo();
+  if (!salvo) return true;
+  const r = await navigator.credentials.get({ publicKey: {
+    challenge: aleatorio(32), timeout: 60000, userVerification: "required", rpId: location.hostname,
+    allowCredentials: [{ type: "public-key", id: deB64(salvo.id), transports: ["internal", "hybrid"] }],
+  } });
+  return !!r && r.response?.authenticatorData && (new Uint8Array(r.response.authenticatorData)[32] & 0x04) !== 0; // bit UV: o usuário foi verificado
+}
+let desbloqueado = false, escondidoEm = null, aoDesbloquear = null;
+function telaBloqueio(msg = "") {
+  abas.hidden = true;
+  document.body.classList.add("bloqueado");
+  let el = $("#telaBloqueio");
+  if (!el) { el = document.createElement("div"); el.id = "telaBloqueio"; document.body.appendChild(el); }
+  el.innerHTML = `<div class="login"><div class="marca"><img src="icons/icon-192.png" alt=""><div><h1>Finanças da Casa</h1><div class="nota-texto">App bloqueado</div></div></div>
+    <div class="cartao" style="text-align:center">
+      <div class="icone-cadeado"><svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg></div>
+      <p style="margin:6px 0 14px">Use a digital, o rosto ou o PIN do aparelho para entrar.</p>
+      ${msg ? `<p class="erro-texto" style="margin:-6px 0 12px">${esc(msg)}</p>` : ""}
+      <button class="botao cheio" data-acao="desbloquear">Desbloquear</button>
+      <button class="botao peq sec" style="margin-top:12px" data-acao="sair">Sair da conta</button>
+    </div></div>`;
+}
+function exigirDesbloqueio() {
+  return new Promise((ok) => {
+    aoDesbloquear = ok;
+    telaBloqueio();
+    acoes.desbloquear();   // tenta abrir o leitor na hora (alguns aparelhos pedem um toque no botão)
+  });
+}
+acoes.desbloquear = async () => {
+  try {
+    if (!(await verificarBiometria())) throw new Error("Não foi possível confirmar");
+    desbloqueado = true;
+    document.body.classList.remove("bloqueado", "fundo-privado");
+    $("#telaBloqueio")?.remove();
+    const f = aoDesbloquear; aoDesbloquear = null;
+    if (f) f(); else abas.hidden = false;
+  } catch (e) {
+    if ($("#telaBloqueio")) telaBloqueio(e?.name === "NotAllowedError" ? "" : "Não deu certo. Tente de novo.");
+  }
+};
+document.addEventListener("visibilitychange", () => {
+  if (!bloqueioSalvo() || !desbloqueado) return;
+  if (document.hidden) {
+    escondidoEm = Date.now();
+    document.body.classList.add("fundo-privado");     // esconde os valores na lista de apps recentes
+  } else {
+    document.body.classList.remove("fundo-privado");
+    if (escondidoEm && Date.now() - escondidoEm > TEMPO_FORA) {
+      desbloqueado = false;
+      exigirDesbloqueio().then(() => { abas.hidden = false; });
+    }
+    escondidoEm = null;
+  }
+});
+async function montarCartaoBloqueio() {
+  const el = $("#cartaoBloqueio");
+  if (!el) return;
+  if (!(await biometriaDisponivel())) {
+    el.outerHTML = `<div class="cartao"><h2 style="margin:0">Bloqueio com biometria</h2><p class="nota-texto" style="margin:4px 0 0">Este aparelho ou navegador não oferece leitura de digital/rosto para sites. No celular Android com Chrome ela costuma estar disponível.</p></div>`;
+    return;
+  }
+  const ativo = !!bloqueioSalvo();
+  el.outerHTML = `<div class="cartao" id="cartaoBloqueio"><div class="linha" style="cursor:default;border-top:0;padding-top:0"><div class="corpo">
+    <div class="titulo">Bloqueio com biometria</div>
+    <div class="meta">${ativo ? "Ativo neste aparelho: o app pede digital, rosto ou PIN ao abrir e ao voltar depois de 1 minuto." : "Pede digital, rosto ou o PIN do aparelho toda vez que o app abrir."}</div></div>
+    <button class="botao peq ${ativo ? "sec" : ""}" data-acao="${ativo ? "desativarBloqueio" : "ativarBloqueio"}">${ativo ? "Desativar" : "Ativar"}</button></div></div>`;
+}
+acoes.ativarBloqueio = async (el) => {
+  el.disabled = true;
+  try {
+    const cred = await navigator.credentials.create({ publicKey: {
+      challenge: aleatorio(32),
+      rp: { name: "Finanças da Casa", id: location.hostname },
+      user: { id: aleatorio(16), name: estado.email ?? "usuario", displayName: estado.email ?? "Finanças da Casa" },
+      pubKeyCredParams: [{ type: "public-key", alg: -7 }, { type: "public-key", alg: -257 }],
+      authenticatorSelection: { authenticatorAttachment: "platform", userVerification: "required", residentKey: "discouraged" },
+      timeout: 60000, attestation: "none",
+    } });
+    localStorage.setItem(CHAVE_BLOQUEIO, JSON.stringify({ id: b64(cred.rawId), em: Date.now() }));
+    desbloqueado = true;
+    avisar("Bloqueio ativado neste aparelho");
+  } catch (e) {
+    avisar(e?.name === "NotAllowedError" ? "Ativação cancelada" : `Não consegui ativar: ${e?.message ?? e}`, e?.name !== "NotAllowedError");
+  }
+  montarCartaoBloqueio();
+};
+acoes.desativarBloqueio = async (el) => {
+  el.disabled = true;
+  try {
+    if (!(await verificarBiometria())) throw new Error();
+    localStorage.removeItem(CHAVE_BLOQUEIO);
+    avisar("Bloqueio desativado neste aparelho");
+  } catch { avisar("Confirme com a biometria para desativar", true); }
+  montarCartaoBloqueio();
+};
+
 // ------------------------------------------------------------------ instalar o app
 // O Chrome avisa (beforeinstallprompt) quando o app pode ser instalado; guardamos o aviso para o botão.
 let pedidoInstalar = null;
@@ -1074,6 +1186,7 @@ async function telaMais() {
 
   $("#conteudo").innerHTML = `
     ${cartaoInstalar()}
+    <div id="cartaoBloqueio"></div>
     <div class="cartao">
       <div class="linha" style="cursor:default"><div class="corpo"><div class="titulo">Open Finance</div>
       <div class="meta">${ultimo ? `Última: ${haQuanto(ultimo.fim ?? ultimo.inicio)}${ultimo.ok === false ? ` · <span class="erro-texto">${esc(ultimo.mensagem ?? "")}</span>` : ""}` : "Nunca sincronizado"}</div></div>
@@ -1153,6 +1266,7 @@ async function telaMais() {
 
     <div class="cartao plano"><div class="linha" style="cursor:default"><div class="corpo"><div class="titulo">${esc(estado.email)}</div><div class="meta">Versão ${VERSAO}</div></div>
       <button class="botao peq sec" data-acao="sair">Sair</button></div></div>`;
+  montarCartaoBloqueio();
 }
 acoes.salvarPluggy = async (el) => {
   const corpo = {};
@@ -1239,7 +1353,7 @@ acoes.removerMembro = async (el) => {
   if (el.dataset.confirmar !== "1") { el.dataset.confirmar = "1"; el.textContent = "Confirmar"; return; }
   try { await q(sb.from("membros").delete().eq("email", el.dataset.email)); recarregar(); } catch (e) { avisar(e.message, true); }
 };
-acoes.sair = async () => { await apagarLocal(); await sb.auth.signOut().catch(() => {}); location.hash = ""; location.reload(); };
+acoes.sair = async () => { await apagarLocal(); try { localStorage.removeItem(CHAVE_BLOQUEIO); } catch { /* ok */ } await sb.auth.signOut().catch(() => {}); location.hash = ""; location.reload(); };
 
 // ------------------------------------------------------------------ PATRIMÔNIO
 // Investimentos (aplicações agrupadas em caixinhas) e dívidas.
@@ -1876,6 +1990,8 @@ async function iniciar() {
     return telaLogin();
   }
   estado.email = session.user.email?.toLowerCase();
+  if (bloqueioSalvo() && !desbloqueado) await exigirDesbloqueio();
+  desbloqueado = true;
 
   let membros = [], erroRede = false;
   try { membros = await q(sb.from("membros").select("email")); }

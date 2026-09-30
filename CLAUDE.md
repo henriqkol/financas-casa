@@ -36,6 +36,9 @@ App de controle financeiro doméstico do Rique (e da esposa). Tudo em português
 ## Login com Google
 - Botão "Entrar com Google" aparece só se o provedor Google estiver ligado no Supabase (`/auth/v1/settings`). `signInWithOAuth` volta para a URL do app; o acesso continua controlado pela tabela `membros` (e-mail do Google precisa estar lá). Mesmo e-mail de uma conta com senha = mesmo usuário (o Supabase liga as identidades).
 
+## Bloqueio com biometria
+- Mais → "Bloqueio com biometria" cria uma credencial WebAuthn de plataforma (digital/rosto/PIN do aparelho) e guarda só o id em `localStorage.bloqueioBiometria`. Com ele ativo, `iniciar()` chama `exigirDesbloqueio()` antes de mostrar qualquer dado; ao voltar ao app depois de 1 min fora, pede de novo. É uma trava local (não substitui o login do Supabase). `Sair` remove o bloqueio.
+
 ## Offline
 - Toda leitura via `q()` (GET do PostgREST) e `fn("/sugestoes" | "/config")` é guardada no IndexedDB `financas-cache` (chave = URL da consulta). Sem internet (`navigator.onLine === false` ou erro de rede) o app usa a cópia e mostra a faixa `#offline` com a data. Telas nunca abertas no aparelho mostram "Sem internet".
 - Sem internet o login não é renovado: `iniciar()` usa a sessão guardada no localStorage só para abrir os dados salvos. `Sair` apaga a cópia local.
