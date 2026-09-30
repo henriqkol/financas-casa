@@ -273,6 +273,14 @@ async function carregarCategorias() {
 }
 
 // ------------------------------------------------------------------ INÍCIO
+const ICONE = {
+  ideia: `<svg viewBox="0 0 24 24"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-4 10.5c.8.7 1 1.5 1 2.5h6c0-1 .2-1.8 1-2.5A6 6 0 0 0 12 3z"/></svg>`,
+  etiqueta: `<svg viewBox="0 0 24 24"><path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/><circle cx="7.5" cy="7.5" r="1.5"/></svg>`,
+  cartao: `<svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="13" rx="3"/><path d="M3 10h18M7 15h4"/></svg>`,
+  cofre: `<svg viewBox="0 0 24 24"><path d="M12 3 4 6v6c0 4.4 3.4 8.2 8 9 4.6-.8 8-4.6 8-9V6z"/><path d="m9 12 2 2 4-4"/></svg>`,
+  banco: `<svg viewBox="0 0 24 24"><path d="M3 10 12 4l9 6M5 10v9M19 10v9M9 10v9M15 10v9M3 21h18"/></svg>`,
+  nota: `<svg viewBox="0 0 24 24"><path d="M6 3h12v18l-3-2-3 2-3-2-3 2zM9 8h6M9 12h6"/></svg>`,
+};
 async function telaInicio() {
   app.innerHTML = topoMes("Resumo") + `<div id="conteudo">${carregando()}</div>`;
   const ant = somarMes(estado.mes, -1);
@@ -327,11 +335,21 @@ async function telaInicio() {
       <div class="compara">${variacao == null ? "Sem dados do mês anterior para comparar" :
         `<span class="${variacao > 0 ? "sobe" : "desce"}">${variacao > 0 ? "▲" : "▼"} ${Math.abs(variacao * 100).toFixed(0)}%</span> em relação a ${ehMesAtual ? `${nomeMes(ant).split(" ")[0]} até o dia ${diaHoje}` : nomeMes(ant).split(" ")[0]} (${Rp(base)})`}</div>
       ${total > 0 ? `<div class="compara">${Math.round((comNota / total) * 100)}% do valor tem nota fiscal detalhada</div>` : ""}
-      ${totalReceitas > 0 ? `<div class="compara">Entrou ${Rp(totalReceitas)} · ${totalReceitas - total >= 0 ? `sobrou <span class="desce">${Rp(totalReceitas - total)}</span>` : `faltou <span class="sobe">${Rp(total - totalReceitas)}</span>`}</div>` : ""}
+      ${totalReceitas > 0 ? `<div class="hero-stats">
+        <div><span>Entrou</span><strong class="num">${Rp(totalReceitas)}</strong></div>
+        <div><span>${totalReceitas - total >= 0 ? "Sobrou" : "Faltou"}</span><strong class="num ${totalReceitas - total >= 0 ? "desce" : "sobe"}">${Rp(Math.abs(totalReceitas - total))}</strong></div>
+      </div>` : ""}
     </div>
     <div class="cartao" id="cartaoMetas" data-acao="irMetas" style="cursor:pointer">
       <h3>Metas do mês</h3><div class="nota-texto"><span class="spinner peq"></span> Carregando…</div>
     </div>
+    <div class="blocos">
+      <button class="bloco b1" data-acao="irSugestoes">${ICONE.ideia}<span>Sugestões</span><strong class="num" id="blocoSug">…</strong></button>
+      <button class="bloco b2" data-acao="verSemCategoria">${ICONE.etiqueta}<span>Sem categoria</span><strong class="num">${nSemCat} <small>gasto${nSemCat === 1 ? "" : "s"}</small></strong></button>
+      <button class="bloco b3" data-acao="irPatrimonio" data-s="dividas">${ICONE.cartao}<span>Dívidas</span><strong class="num">${Rp(devido)}</strong></button>
+      <button class="bloco b4" data-acao="irPatrimonio" data-s="investimentos">${ICONE.cofre}<span>Investido</span><strong class="num">${Rp(investido)}</strong></button>
+    </div>
+    ${nNotas ? `<div class="cartao"><div class="linha" data-acao="verNotasPendentes" style="border-top:0"><div class="corpo"><div class="titulo">${nNotas} nota${nNotas > 1 ? "s" : ""} sem gasto ligado</div><div class="meta">Confirme qual gasto é cada nota</div></div><span class="chip alerta">ver</span></div></div>` : ""}
     <div class="cartao" id="cartaoEvolucao">
       <h3>Evolução</h3>
       <div class="seg seg-peq">${PERIODOS_EVO.map(([k, n]) => `<button data-acao="periodoEvo" data-p="${k}">${n}</button>`).join("")}</div>
@@ -341,11 +359,6 @@ async function telaInicio() {
     <div class="cartao" id="cartaoSugestoes" data-acao="irSugestoes" style="cursor:pointer">
       <h3>Sugestões</h3><div class="nota-texto"><span class="spinner peq"></span> Analisando suas finanças…</div>
     </div>
-    ${(nNotas || nSemCat) ? `<div class="cartao">
-      <h3>Precisa de atenção</h3>
-      ${nNotas ? `<div class="linha" data-acao="verNotasPendentes"><div class="corpo"><div class="titulo">${nNotas} nota${nNotas > 1 ? "s" : ""} sem gasto ligado</div><div class="meta">Confirme qual gasto é cada nota</div></div><span class="chip alerta">ver</span></div>` : ""}
-      ${nSemCat ? `<div class="linha" data-acao="verSemCategoria"><div class="corpo"><div class="titulo">${nSemCat} gasto${nSemCat > 1 ? "s" : ""} sem categoria</div><div class="meta">Categorize uma vez e o app aprende</div></div><span class="chip alerta">ver</span></div>` : ""}
-    </div>` : ""}
     <div class="cartao">
       <h3>Por categoria</h3>
       ${cats.length ? cats.map((c) => {
@@ -377,11 +390,6 @@ async function telaInicio() {
         <div class="valor num ${Number(c.saldo) < 0 ? "sobe" : ""}">${Rp(Math.abs(Number(c.saldo)), Number(c.saldo) < 0 ? "−" : "")}</div></div>`).join("")}
       ${cartoes.map((c) => `<div class="linha" style="cursor:default"><div class="corpo"><div class="titulo">${esc(c.apelido || c.nome)}</div><div class="meta">fatura do cartão</div></div>
         <div class="valor num neutro">${Rp(Math.abs(Number(c.saldo)))}</div></div>`).join("")}
-    </div>` : ""}
-    ${(invs.length || divs.length) ? `<div class="cartao">
-      <h3>Patrimônio</h3>
-      <div class="linha" data-acao="irPatrimonio" data-s="investimentos"><div class="corpo"><div class="titulo">Investimentos e caixinhas</div></div><div class="valor num entrada">${Rp(investido)}</div></div>
-      <div class="linha" data-acao="irPatrimonio" data-s="dividas"><div class="corpo"><div class="titulo">Dívidas</div></div><div class="valor num">${Rp(devido, devido ? "−" : "")}</div></div>
     </div>` : ""}
     <div class="cartao plano">
       <div class="linha" style="cursor:default"><div class="corpo"><div class="titulo">Open Finance</div>
@@ -543,14 +551,18 @@ async function carregarResumoSugestoes() {
     const d = await obterSugestoes();
     if (!$("#cartaoSugestoes")) return;
     const top = d.sugestoes.filter((x) => x.tipo !== "dica").slice(0, 3);
+    const bloco = $("#blocoSug");
+    if (bloco) bloco.innerHTML = d.economia_potencial > 0 ? `${Rp(d.economia_potencial)}<small>/mês</small>` : "em dia";
     el.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">Sugestões</h3><span class="chip">ver todas ›</span></div>
       ${d.economia_potencial > 0 ? `<div class="valor num desce" style="font-size:22px;font-weight:700;margin-top:6px">${Rp(d.economia_potencial)}<span class="nota-texto" style="font-weight:400"> por mês de economia possível</span></div>` : ""}
       <p class="nota-texto priv-aviso">Sugestões ocultas. Toque no olho para ver.</p><ul class="lista priv-bloco">${top.map((x) => `<li class="linha" style="cursor:pointer"><span class="icone-sug ${x.tipo}">${ICONES_SUG[x.tipo]}</span><div class="corpo"><div class="titulo">${esc(x.titulo)}</div></div>${x.economia_mensal ? `<div class="valor num desce" style="font-size:13px">${Rp(x.economia_mensal)}/mês</div>` : ""}</li>`).join("")}</ul>`;
   } catch (e) {
+    const bloco = $("#blocoSug"); if (bloco) bloco.textContent = "abrir";
     el.innerHTML = `<h3>Sugestões</h3><p class="nota-texto">Não consegui analisar agora (${esc(e.message)}).</p>`;
   }
 }
 acoes.irSugestoes = () => irPara("sugestoes");
+acoes.irNotas = () => irPara("notas");
 acoes.tentarDeNovo = () => location.reload();
 acoes.alternarOlho = () => {
   const oculto = !document.body.classList.contains("oculto");
@@ -580,11 +592,17 @@ function tipoLancamento(t) {
   if (t.sentido === "entrada") return n === "despesa" ? "neutro" : "receita";
   return n === "receita" ? "neutro" : "despesa";
 }
+/** "Transferência enviada|FULANO" → ["Transferência enviada", "FULANO"]; sem "|" → ["", descrição]. */
+function partesDescricao(d = "") {
+  const i = d.indexOf("|");
+  return i > 0 ? [d.slice(0, i).trim(), d.slice(i + 1).trim() || d] : ["", d];
+}
+function inicial(t = "") { return (t.match(/[A-Za-zÀ-ÿ0-9]/)?.[0] ?? "•").toUpperCase(); }
 async function telaGastos() {
   const f = estado.filtroGastos;
   const catF = estado.categoriaFiltro;
   const nomeCat = catF === "nula" ? "Sem categoria" : estado.catPorId[catF]?.nome;
-  app.innerHTML = topoMes("Movimentações") + `
+  app.innerHTML = topoMes("Extrato") + `
     <div class="filtros">
       ${catF != null ? `<button class="filtro ativo" data-acao="limparCategoria">${esc(nomeCat)} ✕</button>` : ""}
       ${[["tudo", "Tudo"], ["despesas", "Despesas"], ["receitas", "Receitas"], ["sem-nota", "Sem nota"], ["sem-categoria", "Sem categoria"]]
@@ -715,10 +733,14 @@ async function carregarMovimentacoes() {
         const nota = t.nota_transacao[0]?.notas;
         const tipo = tipoLancamento(t);
         const vCat = valorNaCategoria?.get(t.id);
+        const [tipoTx, nomeTx] = partesDescricao(t.descricao);
+        const titulo = nota?.nome_emitente || nomeTx;
+        const corAv = tipo === "neutro" ? "#8a8f98" : (estado.catPorId[t.categoria_id]?.cor ?? "#8a8f98");
         return `<li class="linha" data-acao="abrirTransacao" data-id="${esc(t.id)}">
+          <span class="avatar" style="background:${esc(corAv)}" aria-hidden="true">${esc(inicial(titulo))}</span>
           <div class="corpo">
-            <div class="titulo">${nota ? ICONE_NOTA + " " : ""}${esc(nota?.nome_emitente || t.descricao)}</div>
-            <div class="meta">${esc(t.contas?.apelido || t.contas?.nome || "")}${t.parcelas_total > 1 ? ` · ${t.parcela_numero}/${t.parcelas_total}` : ""}${t.status === "PENDING" ? " · pendente" : ""} ${chipCategoria(t.categoria_id)}</div>
+            <div class="titulo">${nota ? ICONE_NOTA + " " : ""}${esc(titulo)}</div>
+            <div class="meta">${tipoTx ? esc(tipoTx) + " · " : ""}${esc(t.contas?.apelido || t.contas?.nome || "")}${t.parcelas_total > 1 ? ` · ${t.parcela_numero}/${t.parcelas_total}` : ""}${t.status === "PENDING" ? " · pendente" : ""} ${chipCategoria(t.categoria_id)}</div>
             ${buscando && t.nota_transacao.some((v) => itensQueBatem.has(v.nota_id)) ? `<div class="meta item-achado">na nota: ${esc(itensQueBatem.get(t.nota_transacao.find((v) => itensQueBatem.has(v.nota_id)).nota_id))}</div>` : ""}
           </div>
           <div class="valor num ${tipo === "receita" ? "entrada" : tipo === "neutro" ? "neutro" : ""}">${t.sentido === "entrada" ? Rp(t.valor, "+") : `−${R(t.valor)}`}${vCat != null && Math.abs(vCat - t.valor) > 0.01 ? `<div class="nota-texto" style="text-align:right">${R(vCat)} aqui</div>` : ""}</div>
@@ -1273,12 +1295,11 @@ async function telaMais() {
       <button class="botao peq" data-acao="sincronizar">Sincronizar</button></div>
     </div>
 
-    <div class="cartao"><div class="linha" data-acao="irPatrimonio" data-s="investimentos"><div class="corpo"><div class="titulo">Patrimônio</div>
-      <div class="meta">Investimentos, caixinhas e dívidas</div></div><span class="chip">abrir</span></div></div>
-    <div class="cartao"><div class="linha" data-acao="irMetas"><div class="corpo"><div class="titulo">Metas e plano financeiro</div>
-      <div class="meta">Orçamento do mês, contas do dia 5, acordos e objetivos</div></div><span class="chip">abrir</span></div></div>
-    <div class="cartao"><div class="linha" data-acao="irSugestoes"><div class="corpo"><div class="titulo">Sugestões e plano</div>
-      <div class="meta">Gasto ideal para a renda, onde economizar e como sair das dívidas</div></div><span class="chip">abrir</span></div></div>
+    <div class="atalhos">
+      <button class="atalho" data-acao="irPatrimonio" data-s="investimentos"><span class="icone-bloco b3">${ICONE.banco}</span><span>Patrimônio</span></button>
+      <button class="atalho" data-acao="irSugestoes"><span class="icone-bloco b1">${ICONE.ideia}</span><span>Sugestões</span></button>
+      <button class="atalho" data-acao="irNotas"><span class="icone-bloco b2">${ICONE.nota}</span><span>Notas fiscais</span></button>
+    </div>
 
     <details class="secao" ${!cfg.pluggy_configurado || !itens.length ? "open" : ""}><summary>Open Finance (Pluggy)</summary><div class="conteudo">
       <p class="nota-texto">${cfg.pluggy_configurado ? `Credenciais salvas (Client ID terminando em ${esc(cfg.pluggy_client_id_fim)}).` : "Cole as credenciais da sua aplicação no dashboard.pluggy.ai (aba Aplicação)."}</p>

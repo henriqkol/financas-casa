@@ -1,39 +1,54 @@
+/* Identidade visual (redesign 30/09/2026): faixa verde no topo, cartões arredondados,
+   blocos coloridos e barra inferior com botão central. Fontes: Bricolage Grotesque (títulos
+   e valores) e Plus Jakarta Sans (texto). */
 :root {
-  --fundo: #f4f5f3;
+  --fundo: #f2f3ee;
   --superficie: #ffffff;
-  --superficie-2: #eef0ec;
-  --borda: #e1e4df;
-  --texto: #18201c;
-  --texto-2: #5b6660;
-  --texto-3: #8a948e;
+  --superficie-2: #e9ece5;
+  --borda: #dce1d9;
+  --borda-cartao: transparent;
+  --texto: #132019;
+  --texto-2: #4e5a54;
+  --texto-3: #646f69;
   --acento: #0f6e56;
-  --acento-2: #e3f1ec;
+  --acento-2: #dcefe6;
   --acento-texto: #ffffff;
-  --alerta: #b4561b;
-  --alerta-2: #fbeee3;
+  --alerta: #a8481a;
+  --alerta-2: #fbeadf;
   --perigo: #b3261e;
-  --ok: #2e7d4f;
-  --sombra: 0 1px 2px rgba(16, 24, 20, .06), 0 4px 16px rgba(16, 24, 20, .05);
-  --raio: 14px;
-  --nav-h: 64px;
+  --ok: #1c7446;
+  --hero: #0b5e49;
+  --hero-texto: #ffffff;
+  --hero-texto-2: #cfe6dc;
+  --hero-sobe: #ffc08f;
+  --ouro: #f2be4b;
+  --b1: #0f6e56; --b2: #b04c19; --b3: #4e47a6; --b4: #2c68ae;
+  --sombra: 0 1px 2px rgba(16, 24, 20, .06), 0 10px 28px rgba(16, 24, 20, .07);
+  --raio: 22px;
+  --nav-h: 70px;
+  --fonte-titulo: "Bricolage Grotesque", "Plus Jakarta Sans", system-ui, sans-serif;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --fundo: #0d1714; --superficie: #15211d; --superficie-2: #1c2a25; --borda: #263631;
-    --texto: #e7eeea; --texto-2: #a5b3ac; --texto-3: #74837c;
-    --acento: #3fbf95; --acento-2: #173a30; --acento-texto: #06231a;
-    --alerta: #f0a060; --alerta-2: #3a2a1c; --perigo: #ff8a80; --ok: #6fd39c;
-    --sombra: 0 1px 2px rgba(0,0,0,.3);
+    --fundo: #0b1411; --superficie: #141f1b; --superficie-2: #1c2925; --borda: #27352f; --borda-cartao: #1f2c27;
+    --texto: #e7eeea; --texto-2: #a7b4ad; --texto-3: #8e9c95;
+    --acento: #45c69a; --acento-2: #163a2f; --acento-texto: #062219;
+    --alerta: #f0a265; --alerta-2: #3a2618; --perigo: #ff8a80; --ok: #6fd39c;
+    --hero: #0f4538; --hero-texto: #f1f7f4; --hero-texto-2: #a9d3c3;
+    --b1: #136b55; --b2: #9c4717; --b3: #4640a0; --b4: #27609f;
+    --sombra: 0 1px 2px rgba(0,0,0,.45);
     color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
-  --fundo: #0d1714; --superficie: #15211d; --superficie-2: #1c2a25; --borda: #263631;
-  --texto: #e7eeea; --texto-2: #a5b3ac; --texto-3: #74837c;
-  --acento: #3fbf95; --acento-2: #173a30; --acento-texto: #06231a;
-  --alerta: #f0a060; --alerta-2: #3a2a1c; --perigo: #ff8a80; --ok: #6fd39c;
-  --sombra: 0 1px 2px rgba(0,0,0,.3);
+  --fundo: #0b1411; --superficie: #141f1b; --superficie-2: #1c2925; --borda: #27352f; --borda-cartao: #1f2c27;
+  --texto: #e7eeea; --texto-2: #a7b4ad; --texto-3: #8e9c95;
+  --acento: #45c69a; --acento-2: #163a2f; --acento-texto: #062219;
+  --alerta: #f0a265; --alerta-2: #3a2618; --perigo: #ff8a80; --ok: #6fd39c;
+  --hero: #0f4538; --hero-texto: #f1f7f4; --hero-texto-2: #a9d3c3;
+  --b1: #136b55; --b2: #9c4717; --b3: #4640a0; --b4: #27609f;
+  --sombra: 0 1px 2px rgba(0,0,0,.45);
   color-scheme: dark;
 }
 
@@ -308,3 +323,102 @@ details.pagas summary { cursor: pointer; padding: 8px 0 2px; }
 .busca .limpar-busca { position: absolute; right: 6px; width: 32px; height: 32px; border: 0; border-radius: 50%; background: var(--superficie-2); color: var(--texto-2); cursor: pointer; font-size: 13px; }
 .item-achado { color: var(--acento); }
 .status-conta.parcial { border-color: var(--ok); color: var(--ok); font-size: 12px; }
+
+/* ================================================================ Redesign 30/09/2026 */
+body { font-family: "Plus Jakarta Sans", system-ui, -apple-system, "Segoe UI", sans-serif; }
+h1, h2 { font-family: var(--fonte-titulo); letter-spacing: -.015em; }
+h1 { font-weight: 800; }
+h2 { font-weight: 700; }
+h3 { font-family: var(--fonte-titulo); font-size: 18px; font-weight: 700; color: var(--texto); text-transform: none; letter-spacing: -.01em; }
+.cartao h3 { margin-bottom: 12px; }
+
+.cartao { border-radius: var(--raio); border: 1px solid var(--borda-cartao); padding: 18px; margin-bottom: 14px; }
+.cartao.plano { background: transparent; border-color: var(--borda); }
+.destaque .valor { font-family: var(--fonte-titulo); font-size: 34px; font-weight: 800; letter-spacing: -.02em; }
+.linha .titulo { font-weight: 600; }
+.dia { margin: 18px 6px 6px; font-weight: 700; }
+.botao { border-radius: 14px; }
+.botao.peq { border-radius: 12px; }
+input[type=text], input[type=email], input[type=password], input[type=search], select, textarea { border-radius: 14px; min-height: 48px; }
+.filtro { padding: 8px 14px; font-weight: 600; min-height: 38px; }
+.filtro.ativo { background: var(--texto); color: var(--fundo); border-color: var(--texto); }
+.busca input { height: 48px; border-radius: 16px; }
+.seg { border-radius: 14px; padding: 4px; }
+.seg button { border-radius: 10px; padding: 8px 4px; }
+details.secao { border-radius: var(--raio); border-color: var(--borda-cartao); box-shadow: var(--sombra); }
+#folha .painel { border-radius: 28px 28px 0 0; padding-top: 12px; }
+#folha .alca { width: 44px; height: 5px; }
+#folha .fechar { width: 40px; height: 40px; border-radius: 14px; }
+
+/* Faixa verde do topo */
+.topo { margin: calc(-12px - env(safe-area-inset-top)) -16px 16px; padding: calc(env(safe-area-inset-top) + 22px) 20px 22px;
+  background: var(--hero); color: var(--hero-texto); border-radius: 0 0 32px 32px; }
+.topo h1, .topo:has(.olho) h1 { font-size: clamp(22px, 7vw, 28px); }
+.topo .sub { color: var(--hero-texto-2); }
+.topo .olho { width: 42px; height: 42px; border-radius: 14px; border: 0; background: rgba(255,255,255,.14); color: var(--hero-texto); }
+body.oculto .topo .olho { color: var(--ouro); }
+.topo .seletor-mes { background: rgba(255,255,255,.14); border: 0; border-radius: 14px; min-height: 42px; }
+.topo .seletor-mes button { color: var(--hero-texto); border-radius: 12px; }
+.topo .seletor-mes span { color: var(--hero-texto); }
+.topo .botao.sec { background: rgba(255,255,255,.14); color: var(--hero-texto); }
+/* Abas (Mês/Acordos…) logo abaixo do título ficam dentro da faixa */
+.topo:has(+ .seg) { border-radius: 0; margin-bottom: 0; padding-bottom: 14px; }
+.topo + .seg { margin: 0 -16px 16px; padding: 0 20px 20px; gap: 6px; background: var(--hero); border-radius: 0 0 32px 32px; }
+.topo + .seg button { background: rgba(255,255,255,.1); color: var(--hero-texto); font-size: 14px; padding: 10px 4px; border-radius: 12px; }
+.topo + .seg button.ativo { background: var(--hero-texto); color: var(--hero); box-shadow: none; }
+/* O cartão de destaque que abre a tela continua a faixa */
+.topo:has(+ #conteudo > .destaque:first-child),
+.topo + .seg:has(+ #conteudo > .destaque:first-child) { border-radius: 0; margin-bottom: 0; }
+.topo:has(+ #conteudo > .destaque:first-child) { padding-bottom: 8px; }
+:is(.topo + #conteudo, .topo + .seg + #conteudo) > .destaque:first-child {
+  margin: 0 -16px 18px; padding: 4px 20px 28px; border: 0; border-radius: 0 0 32px 32px; box-shadow: none;
+  background: var(--hero); color: var(--hero-texto); }
+:is(.topo + #conteudo, .topo + .seg + #conteudo) > .destaque:first-child :is(.nota-texto, .compara) { color: var(--hero-texto-2); }
+:is(.topo + #conteudo, .topo + .seg + #conteudo) > .destaque:first-child .valor { font-size: clamp(34px, 11vw, 44px); line-height: 1.05; margin: 4px 0 6px; }
+:is(.topo + #conteudo, .topo + .seg + #conteudo) > .destaque:first-child :is(.sobe) { color: var(--hero-sobe); }
+:is(.topo + #conteudo, .topo + .seg + #conteudo) > .destaque:first-child :is(.desce) { color: var(--ouro); }
+.hero-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 14px; }
+.hero-stats > div { background: rgba(255,255,255,.12); border-radius: 18px; padding: 12px 14px; min-width: 0; }
+.hero-stats span { display: block; font-size: 12px; color: var(--hero-texto-2); }
+.hero-stats strong { display: block; font-size: 17px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Blocos coloridos (Início) */
+.blocos { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 14px; }
+.bloco { border: 0; border-radius: var(--raio); padding: 16px; min-height: 128px; display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+  color: #fff; text-align: left; cursor: pointer; font: inherit; min-width: 0; }
+.bloco svg { width: 26px; height: 26px; fill: none; stroke: #fff; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; margin-bottom: auto; }
+.bloco > span { font-size: 13px; opacity: .92; margin-top: 12px; }
+.bloco strong { font-family: var(--fonte-titulo); font-size: 20px; font-weight: 700; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bloco small { font-size: 12px; font-weight: 500; }
+.b1 { background: var(--b1); } .b2 { background: var(--b2); } .b3 { background: var(--b3); } .b4 { background: var(--b4); }
+
+/* Atalhos (Mais) */
+.atalhos { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
+.atalho { border: 1px solid var(--borda-cartao); background: var(--superficie); box-shadow: var(--sombra); border-radius: 20px; padding: 14px 12px; display: flex; flex-direction: column; align-items: flex-start; gap: 10px; cursor: pointer; font: inherit; font-size: 13px; font-weight: 700; color: var(--texto); text-align: left; }
+.icone-bloco { width: 40px; height: 40px; border-radius: 14px; display: flex; align-items: center; justify-content: center; }
+.icone-bloco svg { width: 20px; height: 20px; fill: none; stroke: #fff; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+
+/* Movimentações: avatar colorido por categoria */
+.avatar { width: 40px; height: 40px; flex: none; border-radius: 14px; color: #fff; display: inline-flex; align-items: center; justify-content: center; font-weight: 800; font-size: 15px; }
+
+/* Sugestões: ícone em bloco em vez de borda lateral */
+.sugestao { border-left: 1px solid var(--borda-cartao); }
+.icone-sug { width: 36px; height: 36px; border-radius: 12px; font-size: 16px; }
+.linha .icone-sug { width: 30px; height: 30px; border-radius: 10px; font-size: 14px; }
+
+/* Barra inferior com botão central */
+#abas { background: var(--superficie); }
+#abas button.ativa span { font-weight: 700; }
+#abas .aba-central { flex: 0 0 76px; }
+#abas .aba-central svg { width: 58px; height: 58px; padding: 15px; border-radius: 20px; margin-top: -26px; box-shadow: 0 8px 20px rgba(15, 110, 86, .35); }
+
+/* Login */
+#app .login { max-width: 420px; margin: 0 auto; }
+#app .login .marca { margin: calc(-12px - env(safe-area-inset-top)) -16px -52px; padding: calc(env(safe-area-inset-top) + 60px) 28px 92px;
+  background: var(--hero); color: var(--hero-texto); border-radius: 0 0 40px 40px; flex-direction: column; align-items: flex-start; gap: 20px; }
+#app .login .marca img { width: 64px; height: 64px; border-radius: 20px; }
+#app .login .marca h1 { font-size: 36px; line-height: 1.05; }
+#app .login .marca .nota-texto { color: var(--hero-texto-2); font-size: 15px; margin-top: 6px; }
+#app .login > .cartao { position: relative; margin: 0 4px 14px; padding: 22px; }
+.resumo-mov { padding: 12px 8px; }
+.resumo-mov strong { font-size: 13px; letter-spacing: -.3px; }

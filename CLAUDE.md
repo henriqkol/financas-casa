@@ -50,5 +50,11 @@ App de controle financeiro doméstico do Rique (e da esposa). Tudo em português
 - Notas escaneadas offline vão para a fila `filaNotas` (localStorage) e são enviadas a `/nfce` quando a conexão volta (evento `online`, ao abrir o app e ao voltar para ele). Chave repetida não entra duas vezes; o servidor também ignora duplicadas.
 - O service worker guarda os arquivos do app, `vendor/jsQR.min.js` (leitor de QR local) e a biblioteca do Supabase.
 
+## Visual (redesign 30/09/2026, v1.10.0)
+- Tokens em `estilo.css` (`--hero`, `--ouro`, `--b1..b4`, `--fonte-titulo`); fontes Bricolage Grotesque (títulos/valores) + Plus Jakarta Sans (Google Fonts, guardadas pelo service worker).
+- `.topo` é a faixa verde de cima. Se logo depois vierem `.seg` (abas) e/ou um `.cartao.destaque` como primeiro filho de `#conteudo`, eles entram na faixa sozinhos (CSS `:has`), sem mudar o JS das telas.
+- Barra inferior: Início · Extrato (aba `gastos`) · Escanear · Metas · Mais. Notas fiscais saiu da barra e ficou nos atalhos de Mais (`irNotas`).
+- Início tem blocos coloridos (Sugestões, Sem categoria, Dívidas, Investido) no lugar dos cartões "Precisa de atenção" e "Patrimônio". Extrato mostra avatar colorido por categoria e separa "Tipo|Nome" da descrição do banco (`partesDescricao`).
+
 ## Análises
 Ver `docs/BASE.md` para as visões e consultas prontas.

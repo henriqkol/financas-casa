@@ -1,6 +1,6 @@
 // Service worker: permite instalar o app e abri-lo sem internet.
 // Estratégia "rede primeiro": com internet, sempre pega a versão mais nova.
-const CACHE = "financas-v3";
+const CACHE = "financas-v4";
 const BASICO = ["./", "index.html", "estilo.css", "app.js", "scanner.js", "config.js", "manifest.webmanifest", "icons/icon-192.png", "vendor/jsQR.min.js"];
 const EXTERNOS = ["https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm"];
 
@@ -14,7 +14,7 @@ self.addEventListener("fetch", (e) => {
   const url = new URL(e.request.url);
   if (e.request.method !== "GET") return;
   const mesmaOrigem = url.origin === self.location.origin;
-  const biblioteca = url.hostname === "cdn.jsdelivr.net";
+  const biblioteca = ["cdn.jsdelivr.net", "fonts.googleapis.com", "fonts.gstatic.com"].includes(url.hostname);
   if (!mesmaOrigem && !biblioteca) return; // dados (Supabase) nunca vão para o cache
   e.respondWith(
     fetch(e.request)
