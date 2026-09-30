@@ -33,6 +33,15 @@ export interface DadosMetas {
 }
 
 const arred = (v: number) => Math.round(v * 100) / 100;
+
+/** Texto do extrato digitado no app: regex (ex.: "(BONIFACIO|\\bIVAN\\b)") ou texto simples.
+ *  Versões antigas do app passavam tudo para maiúsculas e viravam \\b em \\B: aqui isso é desfeito. */
+export function compilarPadrao(p: string | null | undefined): RegExp | null {
+  if (!p || !p.trim()) return null;
+  const fonte = p.trim().replace(/\\([BDSW])/g, (_, c: string) => "\\" + c.toLowerCase());
+  try { return new RegExp(fonte, "i"); } catch { /* não é regex válida: procura o texto literal */ }
+  try { return new RegExp(normalizar(p).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")); } catch { return null; }
+}
 const mesDe = (d: string) => d.slice(0, 7);
 function addDias(dia: string, n: number) { const d = new Date(dia + "T12:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); }
 function mesesEntre(de: string, ate: string) {
@@ -85,20 +94,27 @@ export function montarMetas(d: DadosMetas) {
   const usadas = new Set<string>();
   const contas: {
     tipo: "conta" | "acordo"; nome: string; valor: number; dia: number | null; data: string | null;
-    status: "pago" | "atrasado" | "hoje" | "pendente"; pago_em: string | null; forma: string | null; ref: number;
+    status: "pago" | "parcial" | "atrasado" | "hoje" | "pendente"; pago_em: string | null; pago_valor?: number; forma: string | null; ref: number;
   }[] = [];
   for (const g of d.grupos) for (const i of g.itens) {
     if (i.tipo !== "conta" || (i.periodicidade_meses ?? 1) !== 1 || !(i.valor > 0)) continue;
-    let re: RegExp | null = null;
-    try { re = i.padrao ? new RegExp(i.padrao) : null; } catch { re = null; }
-    const achado = re ? d.saidas_mes.find((t) => !usadas.has(t.id) && re!.test(normalizar(t.texto)) && Math.abs(t.valor - i.valor) <= Math.max(i.valor * 0.3, 10)) : undefined;
-    if (achado) usadas.add(achado.id);
+    const re = compilarPadrao(i.padrao);
+    const candidatos = re ? d.saidas_mes.filter((t) => !usadas.has(t.id) && re.test(normalizar(t.texto))) : [];
+    // 1) um pagamento com valor parecido; 2) vários pagamentos que somados cobrem a conta (ex.: Pix para duas pessoas)
+    const unico = candidatos.find((t) => Math.abs(t.valor - i.valor) <= Math.max(i.valor * 0.3, 10));
+    // soma muito acima da conta (mais de 1,5×) indica outro pagamento ao mesmo favorecido: não conta
+    const somaTodos = arred(candidatos.reduce((s, t) => s + t.valor, 0));
+    const usados = unico ? [unico] : somaTodos <= i.valor * 1.5 ? candidatos : [];
+    const pagoTotal = arred(usados.reduce((s, t) => s + t.valor, 0));
+    const quitada = !!unico || (usados.length > 0 && pagoTotal >= i.valor * 0.9);
+    if (quitada) usados.forEach((t) => usadas.add(t.id));
     const data = i.dia_vencimento ? `${mes}-${String(Math.min(i.dia_vencimento, 28)).padStart(2, "0")}` : null;
     const antesDoPlano = !!d.inicio_plano && mes < mesDe(d.inicio_plano);
+    const ultimo = usados.map((t) => t.data).sort().at(-1) ?? null;
     contas.push({
       tipo: "conta", nome: i.nome, valor: i.valor, dia: i.dia_vencimento, data,
-      status: achado ? "pago" : data && data < d.hoje && !antesDoPlano ? "atrasado" : data === d.hoje ? "hoje" : "pendente",
-      pago_em: achado?.data ?? null, forma: i.forma_pagamento, ref: i.id,
+      status: quitada ? "pago" : pagoTotal > 0 ? "parcial" : data && data < d.hoje && !antesDoPlano ? "atrasado" : data === d.hoje ? "hoje" : "pendente",
+      pago_em: quitada || pagoTotal > 0 ? ultimo : null, pago_valor: pagoTotal, forma: i.forma_pagamento, ref: i.id,
     });
   }
   for (const a of d.acordos) {
@@ -117,7 +133,7 @@ export function montarMetas(d: DadosMetas) {
       pago_em: pago?.data ?? null, forma: `parcela ${numero}/${s.total}`, ref: a.id,
     });
   }
-  const ordemStatus = { atrasado: 0, hoje: 1, pendente: 2, pago: 3 };
+  const ordemStatus = { atrasado: 0, hoje: 1, parcial: 2, pendente: 3, pago: 4 };
   contas.sort((a, b) => ordemStatus[a.status] - ordemStatus[b.status] || (a.data ?? "9999").localeCompare(b.data ?? "9999"));
 
   // ---------- Resultado do mês

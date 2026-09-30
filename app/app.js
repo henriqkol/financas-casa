@@ -1918,8 +1918,8 @@ async function obterMetas(forcar = false) {
   cacheMetas = { em: Date.now(), dados };
   return dados;
 }
-const ICONE_STATUS = { pago: "✓", atrasado: "!", hoje: "•", pendente: "○" };
-const NOME_STATUS = { pago: "pago", atrasado: "atrasado", hoje: "vence hoje", pendente: "a pagar" };
+const ICONE_STATUS = { pago: "✓", parcial: "½", atrasado: "!", hoje: "•", pendente: "○" };
+const NOME_STATUS = { pago: "pago", parcial: "pago em parte", atrasado: "atrasado", hoje: "vence hoje", pendente: "a pagar" };
 const sinal = (v) => (v < 0 ? "−" : "+");
 const mesAno = (d) => { const [a, m] = d.split("-"); return `${m}/${a}`; };
 
@@ -1939,7 +1939,8 @@ acoes.abaMetas = (el) => { estado.abaMetas = el.dataset.s; recarregar(); };
 acoes.irMetas = (el) => { estado.abaMetas = el?.dataset?.s || estado.abaMetas || "mes"; irPara("metas"); };
 
 function linhaConta(c) {
-  const quando = c.status === "pago" ? (c.pago_em ? `pago em ${dataCurta(c.pago_em).slice(0, 5)}` : "pago") : c.data ? `${NOME_STATUS[c.status]} · dia ${Number(c.data.slice(8, 10))}` : "vencimento a definir";
+  const quando = c.status === "pago" ? (c.pago_em ? `pago em ${dataCurta(c.pago_em).slice(0, 5)}` : "pago")
+    : c.status === "parcial" ? `pago ${R(c.pago_valor)} de ${R(c.valor)}${c.data ? ` · dia ${Number(c.data.slice(8, 10))}` : ""}` : c.data ? `${NOME_STATUS[c.status]} · dia ${Number(c.data.slice(8, 10))}` : "vencimento a definir";
   return `<li class="linha conta-mes ${c.status}" ${c.tipo === "acordo" ? `data-acao="abrirDivida" data-id="${c.ref}"` : `data-acao="editarItemOrcamento" data-id="${c.ref}"`}>
     <span class="status-conta ${c.status}">${ICONE_STATUS[c.status]}</span>
     <div class="corpo"><div class="titulo">${esc(c.nome)}</div><div class="meta">${quando}${c.forma ? ` · ${esc(c.forma)}` : ""}</div></div>
@@ -2094,6 +2095,7 @@ function formItemOrcamento(i, grupoId) {
     </div>
     <label class="campo"><span>Forma de pagamento</span><input type="text" id="oiForma" value="${esc(i?.forma_pagamento ?? "")}"></label>
     <label class="campo"><span>Texto no extrato (para marcar como paga)</span><input type="text" id="oiPadrao" value="${esc(i?.padrao ?? "")}" placeholder="Ex.: PETLOVE"></label>
+    <p class="nota-texto" style="margin-top:-6px">Um nome que aparece no extrato. Para mais de um, separe com | (ex.: <code>BONIFACIO|IVAN KOLLING</code>). Se forem vários Pix no mês, o app soma todos.</p>
     <div class="botoes"><button class="botao cheio" data-acao="salvarItemOrcamento" data-id="${i?.id ?? ""}" data-grupo="${grupoId ?? i?.grupo_id ?? ""}">Salvar</button></div>
     ${i ? `<div class="botoes"><button class="botao peq sec" data-acao="removerItemOrcamento" data-id="${i.id}">Remover item</button></div>` : ""}`;
 }
@@ -2107,7 +2109,8 @@ acoes.salvarItemOrcamento = async (el) => {
   const valor = numeroDigitado($("#oiValor").value);
   if (!nome || !(valor >= 0)) return avisar("Preencha nome e valor", true);
   const dia = parseInt($("#oiDia").value, 10);
-  const padrao = normalizar($("#oiPadrao").value.trim());
+  // Sem acento e em maiúsculas, mas sem mexer nos códigos de regex (\b, \d…)
+  const padrao = $("#oiPadrao").value.trim().split(/(\\.)/).map((p, k) => (k % 2 ? p : p.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase())).join("");
   const dados = {
     nome, valor, periodicidade_meses: Number($("#oiPer").value), tipo: $("#oiTipo").value,
     dia_vencimento: dia >= 1 && dia <= 31 ? dia : null, forma_pagamento: $("#oiForma").value.trim() || null, padrao: padrao || null,

@@ -307,3 +307,4 @@ details.pagas summary { cursor: pointer; padding: 8px 0 2px; }
 .busca input::-webkit-search-cancel-button { display: none; }
 .busca .limpar-busca { position: absolute; right: 6px; width: 32px; height: 32px; border: 0; border-radius: 50%; background: var(--superficie-2); color: var(--texto-2); cursor: pointer; font-size: 13px; }
 .item-achado { color: var(--acento); }
+.status-conta.parcial { border-color: var(--ok); color: var(--ok); font-size: 12px; }

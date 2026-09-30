@@ -529,3 +529,24 @@ test("metas: parcela paga antes do cadastro e contas antes do início do plano",
   assert.equal(st["Acordo Laynara"], "pago");
   assert.equal(st["Aluguel"], "pendente", "antes do início do plano não marca atraso");
 });
+
+import { compilarPadrao } from "../supabase/functions/api/lib/metas.ts";
+
+test("metas: conta paga com vários Pix e padrão digitado no app", () => {
+  // \\B (maiúsculas, gravado por versão antiga) volta a ser \\b
+  assert.ok(compilarPadrao("(BONIFACIO|\\BIVAN\\B)")!.test("TRANSFERENCIA ENVIADA IVAN KOLLING LIMBERGER"));
+  assert.ok(compilarPadrao("PETLOVE")!.test("PAGAMENTO PETLOVE SAUDE"));
+  const base: any = dadosMetas({ hoje: "2026-10-10", inicio_plano: "2026-10-01" });
+  base.grupos[0].itens.push({ id: 9, nome: "Mães", valor: 196, periodicidade_meses: 1, tipo: "conta", dia_vencimento: 5, forma_pagamento: "Pix", padrao: "(BONIFACIO|\\BIVAN\\B)", observacao: null });
+  base.saidas_mes = [
+    { id: "i", data: "2026-10-06", valor: 150, texto: "Transferência enviada|IVAN KOLLING LIMBERGER" },
+    { id: "f", data: "2026-10-06", valor: 46, texto: "Transferência enviada|Fernanda Goncalves Bonifacio" },
+  ];
+  const maes = montarMetas(base).contas.find((c: any) => c.nome === "Mães")!;
+  assert.equal(maes.status, "pago");
+  // só um dos dois Pix: pago em parte
+  base.saidas_mes = base.saidas_mes.slice(1);
+  const parcial = montarMetas(base).contas.find((c: any) => c.nome === "Mães")!;
+  assert.equal(parcial.status, "parcial");
+  assert.equal(parcial.pago_valor, 46);
+});
