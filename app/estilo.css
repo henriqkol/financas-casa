@@ -591,3 +591,7 @@ details.mais-cats > summary::-webkit-details-marker { display: none; }
   body[data-aba="inicio"] .a-fazer { max-width: none; }
 }
 .bloco.neutro strong { font-size: clamp(16px, 4.6vw, 20px); white-space: normal; overflow-wrap: anywhere; line-height: 1.15; }
+
+/* Lançamento recém-editado: destaque breve ao voltar para a lista */
+.linha.destacado { animation: destaque 1.6s ease-out; border-radius: 12px; }
+@keyframes destaque { 0%, 40% { background: var(--acento-2); } 100% { background: transparent; } }

@@ -261,14 +261,14 @@ abas.addEventListener("click", (e) => {
 
 function pararLeitor() { estado.leitor?.parar(); estado.leitor = null; }
 
-async function irPara(aba) {
+async function irPara(aba, manterRolagem = false) {
   pararLeitor();
   if (aba !== estado.aba && estado.aba !== "escanear") estado.abaAnterior = estado.aba;
   estado.aba = aba;
   document.body.dataset.aba = aba;
   history.replaceState(null, "", `#${aba}`);
   abas.querySelectorAll("button").forEach((b) => b.classList.toggle("ativa", b.dataset.aba === aba));
-  window.scrollTo(0, 0);
+  if (!manterRolagem) window.scrollTo(0, 0);
   const tela = { inicio: telaInicio, gastos: telaGastos, escanear: telaEscanear, notas: telaNotas, mais: telaMais, patrimonio: telaPatrimonio, sugestoes: telaSugestoes, metas: telaMetas }[aba] ?? telaInicio;
   try { await tela(); } catch (e) {
     const semRede = /^Sem internet/.test(e.message);
@@ -279,6 +279,26 @@ async function irPara(aba) {
   }
 }
 function recarregar() { return irPara(estado.aba); }
+/** Atualiza a tela depois de uma edição sem perder o lugar: mantém a rolagem, os grupos abertos
+ *  e destaca o lançamento que acabou de ser alterado. */
+if ("scrollRestoration" in history) history.scrollRestoration = "manual";
+async function recarregarNoLugar() {
+  const seletorTx = estado.ultimaTx ? `[data-acao="abrirTransacao"][data-id="${CSS.escape(estado.ultimaTx)}"]` : null;
+  const y = estado.ancoraTx?.y ?? window.scrollY;
+  const topoAntes = estado.ancoraTx?.topo ?? null;
+  const abertos = [...document.querySelectorAll("details[data-k][open]")].map((d) => d.dataset.k);
+  if (estado.aba === "gastos" && $("#conteudo")) await carregarMovimentacoes();
+  else await irPara(estado.aba, true);
+  for (const k of abertos) { const d = document.querySelector(`details[data-k="${CSS.escape(k)}"]`); if (d) d.open = true; }
+  window.scrollTo(0, y);
+  const li = seletorTx ? document.querySelector(seletorTx) : null;
+  if (li) {
+    // o lançamento editado volta exatamente para onde estava na tela
+    if (topoAntes != null) window.scrollBy(0, li.getBoundingClientRect().top - topoAntes);
+    li.classList.add("destacado"); setTimeout(() => li.classList.remove("destacado"), 1600);
+  }
+  estado.ancoraTx = null;
+}
 
 // Folha inferior (detalhes). O botão "voltar" do Android fecha a folha.
 let folhaAberta = false;
@@ -296,7 +316,7 @@ function fecharFolha(viaHistorico = false) {
   folha.innerHTML = "";
   if (!viaHistorico) history.back();
   // Algo mudou dentro da folha (categoria, observação…): atualiza a tela de trás
-  if (estado.folhaSujou) { estado.folhaSujou = false; setTimeout(recarregar, 50); }
+  if (estado.folhaSujou) { estado.folhaSujou = false; setTimeout(recarregarNoLugar, 50); }
 }
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && folhaAberta) fecharFolha(); });
 window.addEventListener("popstate", () => { if (folhaAberta) fecharFolha(true); });
@@ -899,20 +919,24 @@ async function carregarMovimentacoes() {
     </div>
     <div class="nota-texto" style="margin:0 2px 4px">${buscando ? `${pl(totalEncontrado, "resultado", "resultados")} para “${esc(busca)}” em todos os meses${totalEncontrado > txs.length ? ` (mostrando os ${txs.length} mais recentes)` : ""}` : pl(atuais.length, "lançamento", "lançamentos")}${contaEscolhida ? ` em ${esc(contaEscolhida.apelido || contaEscolhida.nome)}` : ""}${valorNaCategoria && catF !== "nula" ? ` · ${R(saidas)} em ${esc(nomeCat)}` : ""}.
       Dia a dia = receitas − despesas de consumo. Pagamentos de dívida aparecem marcados e entram só em “depois das dívidas”; transferências entre contas, faturas e investimentos não contam.</div>
-    ${futuros.length ? `<details class="secao-futuros"><summary>${pl(futuros.length, "lançamento agendado", "lançamentos agendados")} · ${R(futuros.reduce((s, t) => s + Number(t.valor), 0))} · ainda não aconteceram</summary>${lista(futuros)}</details>` : ""}
+    ${futuros.length ? `<details class="secao-futuros" data-k="futuros"><summary>${pl(futuros.length, "lançamento agendado", "lançamentos agendados")} · ${R(futuros.reduce((s, t) => s + Number(t.valor), 0))} · ainda não aconteceram</summary>${lista(futuros)}</details>` : ""}
     ${estado.ordemExtrato === "valor" ? lista(atuais) : [...porDia.entries()].map(([dia, ts]) => {
       const e = somaTipo(ts, "receita"), sd = somaTipo(ts, "despesa"), dv = somaDividas(ts);
       const contados = ts.filter((t) => tipoLancamento(t) !== "neutro" || ehPagamentoDivida(t));
       const internos = ts.filter((t) => tipoLancamento(t) === "neutro" && !ehPagamentoDivida(t));
       return `<div class="dia"><span>${dataLonga(dia)}</span><span class="num">${e ? `<span class="entrada">${Rp(e, "+")}</span>` : ""}${e && sd ? " · " : ""}${sd ? `−${R(sd)}` : ""}${dv ? `${e || sd ? " · " : ""}<span class="dia-divida">dívidas −${R(dv)}</span>` : ""}</span></div>
       ${contados.length ? lista(contados) : ""}
-      ${internos.length ? `<details class="internos"><summary>${pl(internos.length, "movimentação interna", "movimentações internas")} · não entram nas somas</summary>${lista(internos)}</details>` : ""}`;
+      ${internos.length ? `<details class="internos" data-k="int-${dia}"><summary>${pl(internos.length, "movimentação interna", "movimentações internas")} · não entram nas somas</summary>${lista(internos)}</details>` : ""}`;
     }).join("")}`;
 }
 acoes.filtroGastos = (el) => { estado.filtroGastos = el.dataset.f; recarregar(); };
 acoes.limparCategoria = () => { estado.categoriaFiltro = null; recarregar(); };
 
-acoes.abrirTransacao = (el) => abrirTransacao(el.dataset.id);
+acoes.abrirTransacao = (el) => {
+  // guarda onde a linha estava na tela para voltar ao mesmo lugar depois de editar
+  estado.ultimaTx = el.dataset.id; estado.ancoraTx = { y: window.scrollY, topo: el.getBoundingClientRect().top };
+  abrirTransacao(el.dataset.id);
+};
 /** Mostra "Salvo ✓" ao lado de um campo salvo automaticamente. */
 function marcarSalvo(id, texto = "Salvo ✓", erro = false) {
   const el = $(`#${id}`);
@@ -2375,8 +2399,8 @@ acoes.ligarDivida = async (el) => {
   try {
     const r = await fn("/pagar-divida", { divida_id: Number(sel.value), transacao_id: el.dataset.tx, aprender: $("#dvAprender").checked });
     avisar(r.outros_reconhecidos ? `Registrado. Mais ${pl(r.outros_reconhecidos, "pagamento reconhecido", "pagamentos reconhecidos")} no extrato.` : "Pagamento registrado na dívida");
+    estado.folhaSujou = true;
     fecharFolha();
-    recarregar();
   } catch (e) { avisar(e.message, true); el.disabled = false; }
 };
 
