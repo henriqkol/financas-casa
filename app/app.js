@@ -265,6 +265,7 @@ async function irPara(aba) {
   pararLeitor();
   if (aba !== estado.aba && estado.aba !== "escanear") estado.abaAnterior = estado.aba;
   estado.aba = aba;
+  document.body.dataset.aba = aba;
   history.replaceState(null, "", `#${aba}`);
   abas.querySelectorAll("button").forEach((b) => b.classList.toggle("ativa", b.dataset.aba === aba));
   window.scrollTo(0, 0);
@@ -357,10 +358,30 @@ async function telaInicio() {
     todas(() => sb.from("v_receitas").select("valor, data, categoria").eq("mes", ant), "transacao_id").catch(() => []),
     q(sb.from("contas").select("id, nome, apelido, tipo, saldo, atualizado_em, negativo_em_acordo").eq("ativa", true).order("tipo").order("saldo", { ascending: false })).catch(() => []),
   ]);
-  const totalReceitas = receitas.reduce((s, r) => s + Number(r.valor), 0);
+  const hoje = hojeISO();
+  const ehMesAtual = estado.mes === mesAtual();
+  const mesFuturo = estado.mes > mesAtual();
+  const nomeM = nomeMes(estado.mes).split(" ")[0];
+  const nomeAnt = nomeMes(ant).split(" ")[0];
+  const diaHoje = new Date().getDate();
+
+  // ---------- Números do mês (só o que já aconteceu: data até hoje)
+  const receitasAteHoje = receitas.filter((r) => String(r.data ?? "") <= hoje);
+  const totalReceitas = receitasAteHoje.reduce((s, r) => s + Number(r.valor), 0);
   const totalReceitasAnt = receitasAnt.reduce((s, r) => s + Number(r.valor), 0);
+  const gastos = linhas.filter((l) => l.conta_como_gasto && l.data <= hoje);
+  const total = gastos.reduce((s, l) => s + Number(l.valor), 0);
+  const agendado = linhas.filter((l) => l.conta_como_gasto && l.data > hoje).reduce((s, l) => s + Number(l.valor), 0);
+  const pagoDividas = linhas.filter((l) => l.categoria === "Pagamento de dívida" && l.data <= hoje).reduce((s, l) => s + Number(l.valor), 0);
+  const resultado = totalReceitas - total - pagoDividas;
+  const totalAnt = anteriores.reduce((s, l) => s + Number(l.valor), 0);
+  const antAteHoje = anteriores.filter((l) => Number(l.data.slice(8, 10)) <= diaHoje).reduce((s, l) => s + Number(l.valor), 0);
+  const base = ehMesAtual ? antAteHoje : totalAnt;
+  const variacao = base > 0 ? (total - base) / base : null;
+  const comNota = gastos.filter((l) => l.via_nota).reduce((s, l) => s + Number(l.valor), 0);
+
   const recPorCat = new Map();
-  for (const r of receitas) recPorCat.set(r.categoria_id ?? 0, { id: r.categoria_id, nome: r.categoria, valor: (recPorCat.get(r.categoria_id ?? 0)?.valor ?? 0) + Number(r.valor) });
+  for (const r of receitasAteHoje) recPorCat.set(r.categoria_id ?? 0, { id: r.categoria_id, nome: r.categoria, valor: (recPorCat.get(r.categoria_id ?? 0)?.valor ?? 0) + Number(r.valor) });
   const recCats = [...recPorCat.values()].sort((a, b) => b.valor - a.valor);
   const bancos = contasSaldo.filter((c) => c.tipo === "BANK");
   const cartoes = contasSaldo.filter((c) => c.tipo === "CREDIT" && Math.abs(Number(c.saldo || 0)) > 0);
@@ -369,20 +390,6 @@ async function telaInicio() {
   const devido = divs.reduce((s, d) => s + Number(d.saldo_devedor || 0), 0);
   const devidoCartoes = divs.filter((d) => d.fonte === "fatura" || d.fonte === "parcelas").reduce((s, d) => s + Number(d.saldo_devedor || 0), 0);
   const devidoAcordos = divs.filter((d) => d.tipo === "acordo").reduce((s, d) => s + Number(d.saldo_devedor || 0), 0);
-  // Lançamentos com data futura (ex.: parcela agendada para o dia 5) ainda não aconteceram: ficam fora das somas
-  const hoje = hojeISO();
-  const agendado = linhas.filter((l) => l.conta_como_gasto && l.data > hoje).reduce((s, l) => s + Number(l.valor), 0);
-  const nomePagDivida = "Pagamento de dívida";
-  const pagoDividas = linhas.filter((l) => l.categoria === nomePagDivida && l.data <= hoje).reduce((s, l) => s + Number(l.valor), 0);
-  const gastos = linhas.filter((l) => l.conta_como_gasto && l.data <= hoje);
-  const total = gastos.reduce((s, l) => s + Number(l.valor), 0);
-  const totalAnt = anteriores.reduce((s, l) => s + Number(l.valor), 0);
-  const ehMesAtual = estado.mes === mesAtual();
-  const diaHoje = new Date().getDate();
-  const antAteHoje = anteriores.filter((l) => Number(l.data.slice(8, 10)) <= diaHoje).reduce((s, l) => s + Number(l.valor), 0);
-  const base = ehMesAtual ? antAteHoje : totalAnt;
-  const variacao = base > 0 ? (total - base) / base : null;
-  const comNota = gastos.filter((l) => l.via_nota).reduce((s, l) => s + Number(l.valor), 0);
 
   const porCat = new Map();
   for (const l of gastos) {
@@ -393,91 +400,98 @@ async function telaInicio() {
   }
   const cats = [...porCat.values()].sort((a, b) => b.valor - a.valor);
   const max = cats[0]?.valor || 1;
+  const semClassificacao = cats.filter((c) => c.id == null || c.nome === "Outros").reduce((s, c) => s + c.valor, 0);
   const nNotas = pend.filter((p) => p.tipo === "nota_sem_gasto").length;
   const nSemCat = pend.filter((p) => p.tipo === "gasto_sem_categoria").length;
+  const nSemCatMes = linhas.filter((l) => l.categoria_id == null && l.data <= hoje).length;
   const sync = ultimo[0];
-
-  const diaADia = totalReceitas - total, depoisDividas = diaADia - pagoDividas;
-  // Salário previsto: dia em que caiu no mês anterior (para o início do mês, antes de entrar)
   const salarioAnt = receitasAnt.filter((r) => r.categoria === "Salário").map((r) => Number(String(r.data).slice(8, 10)));
   const diaSalario = salarioAnt.length ? Math.min(...salarioAnt) : null;
 
+  const barraCat = (c, total, cor) => `<div class="barra-cat" data-acao="verCategoria" data-id="${c.id ?? ""}">
+      <div class="nome"><span>${esc(c.nome)}</span>${c.id == null || c.nome === "Outros" ? `<span class="chip alerta chip-mini">sem classificação</span>` : ""}</div>
+      <div class="num">${Rp(c.valor)}<span class="pct">${Math.round((c.valor / (total || 1)) * 100)}%</span></div>
+      <div class="trilho"><i style="width:${(c.valor / max) * 100}%;background:${cor}"></i></div></div>`;
+  const corBarra = (c) => (c.id == null || c.nome === "Outros" ? "var(--alerta)" : "var(--barra)");
+  const TOP = 6;
+
+  // Comparação em palavras (gastar mais é ruim): sem setas ambíguas
+  const comparacao = variacao == null ? "" : Math.abs(variacao) < 0.01 ? `Gastos iguais a ${nomeAnt}${ehMesAtual ? ` no mesmo período` : ""}`
+    : `Gastos <strong class="${variacao > 0 ? "sobe" : "desce"}">${Math.abs(variacao * 100).toFixed(0)}% ${variacao > 0 ? "acima" : "abaixo"}</strong> de ${nomeAnt}${ehMesAtual ? ` até o dia ${diaHoje}` : ""} (${Rp(base)})`;
+
   $("#conteudo").innerHTML = `
-    <div class="cartao destaque">
-      <div class="nota-texto">Gasto em ${nomeMes(estado.mes)}${ehMesAtual ? " até hoje" : ""}</div>
-      <div class="valor num">${Rp(total)}</div>
-      <div class="compara">${variacao == null ? "Sem dados do mês anterior para comparar" :
-        `<span class="${variacao > 0 ? "sobe" : "desce"}">${variacao > 0 ? "▲" : "▼"} ${Math.abs(variacao * 100).toFixed(0)}%</span> em relação a ${ehMesAtual ? `${nomeMes(ant).split(" ")[0]} até o dia ${diaHoje}` : nomeMes(ant).split(" ")[0]} (${Rp(base)})`}</div>
-      ${agendado > 0 ? `<div class="compara">+ ${R(agendado)} agendado para os próximos dias (ainda não conta)</div>` : ""}
-      ${totalReceitas > 0 || pagoDividas > 0 ? `<div class="hero-stats ${pagoDividas > 0 ? "tres" : ""}">
+    <div class="cartao destaque hero-resultado">
+      <div class="nota-texto">${mesFuturo ? `${maiuscula(nomeM)} ainda não começou` : `Resultado de ${nomeM}${ehMesAtual ? " até hoje" : ""}`}</div>
+      <div class="linha-resultado"><div class="valor num ${resultado < 0 ? "sobe" : "desce"}">${Rp(Math.abs(resultado), resultado < 0 ? "−" : "+")}</div>
+        ${mesFuturo || (totalReceitas === 0 && total === 0) ? "" : `<span class="selo-resultado ${resultado < 0 ? "ruim" : "bom"}">${resultado < 0 ? "no vermelho" : "no azul"}</span>`}</div>
+      <div class="compara">Entradas − gastos − dívidas pagas${ehMesAtual ? ", só o que já aconteceu" : " no mês"}</div>
+      <div class="hero-stats tres">
         <div><span>Entrou</span><strong class="num">${Rp(totalReceitas)}</strong></div>
-        <div><span>Dia a dia</span><strong class="num ${diaADia >= 0 ? "desce" : "sobe"}">${Rp(Math.abs(diaADia), diaADia >= 0 ? "+" : "−")}</strong></div>
-        ${pagoDividas > 0 ? `<div><span>Depois das dívidas</span><strong class="num ${depoisDividas >= 0 ? "desce" : "sobe"}">${Rp(Math.abs(depoisDividas), depoisDividas >= 0 ? "+" : "−")}</strong></div>` : ""}
+        <div><span>Gastos</span><strong class="num">${Rp(total)}</strong></div>
+        <div><span>Dívidas pagas</span><strong class="num">${Rp(pagoDividas)}</strong></div>
       </div>
-      ${pagoDividas > 0 ? `<div class="compara" style="margin-top:8px">Dia a dia = entradas − gastos de consumo. Depois das dívidas = também descontando ${Rp(pagoDividas)} pagos em acordos e parcelas.</div>` : ""}` : ""}
+      ${comparacao ? `<div class="compara" style="margin-top:10px">${comparacao}</div>` : ""}
+      ${agendado > 0 ? `<div class="compara">+ ${R(agendado)} agendado para os próximos dias (ainda não conta)</div>` : ""}
     </div>
-    <div class="cartao" id="cartaoMetas" data-acao="irMetas" style="cursor:pointer">
-      <h3>Metas do mês</h3><div class="nota-texto"><span class="spinner peq"></span> Carregando…</div>
-    </div>
-    <div class="blocos">
-      <button class="bloco b1" data-acao="irSugestoes">${ICONE.ideia}<span>Sugestões</span><strong class="num" id="blocoSug">…</strong></button>
-      <button class="bloco b2" data-acao="${nSemCat ? "abrirTriagem" : "verSemCategoria"}">${ICONE.etiqueta}<span>Sem categoria</span><strong class="num">${nSemCat.toLocaleString("pt-BR")} <small>${nSemCat === 1 ? "lançamento" : "lançamentos"}</small></strong>${nSemCat ? `<small class="bloco-sub">toque para categorizar em sequência</small>` : ""}</button>
-      <button class="bloco b3" data-acao="irPatrimonio" data-s="dividas">${ICONE.cartao}<span>Dívidas (tudo)</span><strong class="num">${Rp(devido)}</strong>
-        ${devidoCartoes > 0 ? `<small class="bloco-sub">acordos ${Rp(devidoAcordos)} + cartões ${Rp(devidoCartoes)}</small>` : ""}</button>
-      <button class="bloco b4" data-acao="irPatrimonio" data-s="investimentos">${ICONE.cofre}<span>Investido</span><strong class="num">${Rp(investido)}</strong></button>
-    </div>
-    ${nNotas || total > 0 ? `<div class="cartao cartao-notas">
-      <div class="linha" data-acao="${nNotas ? "verNotasPendentes" : "irNotas"}" style="border-top:0;padding:0"><span class="icone-bloco b2" style="flex:none">${ICONE.nota}</span><div class="corpo">
-        <div class="titulo">Notas fiscais</div>
-        <div class="meta">${total > 0 ? `${Math.round((comNota / total) * 100)}% dos gastos do mês têm nota detalhada` : ""}${total > 0 && nNotas ? " · " : ""}${nNotas ? `${pl(nNotas, "nota", "notas")} sem gasto ligado` : ""}</div></div>
-        <span class="chip ${nNotas ? "alerta" : ""}">${nNotas ? "confirmar" : "ver"}</span></div></div>` : ""}
-    <div class="cartao" id="cartaoEvolucao">
-      <h3>Evolução</h3>
-      <div class="seg seg-peq">${PERIODOS_EVO.map(([k, n]) => `<button data-acao="periodoEvo" data-p="${k}">${n}</button>`).join("")}</div>
-      <p class="nota-texto priv-aviso">Gráfico oculto. Toque no olho para ver.</p>
-      <div class="corpo-evo priv-bloco"><div class="nota-texto"><span class="spinner peq"></span> Montando o gráfico…</div></div>
-    </div>
-    <div class="cartao" id="cartaoSugestoes" data-acao="irSugestoes" style="cursor:pointer">
-      <h3>Sugestões</h3><div class="nota-texto"><span class="spinner peq"></span> Analisando suas finanças…</div>
-    </div>
-    <div class="cartao">
-      <h3>Por categoria</h3>
-      ${cats.length ? cats.map((c) => {
-        const cor = estado.catPorId[c.id]?.cor ?? "#8a8f98";
-        return `<div class="barra-cat" data-acao="verCategoria" data-id="${c.id ?? ""}">
-          <div class="nome"><span class="ponto" style="background:${esc(cor)}"></span><span>${esc(c.nome)}</span></div>
-          <div class="num">${Rp(c.valor)}<span class="pct">${Math.round((c.valor / total) * 100)}%</span></div>
-          <div class="trilho"><i style="width:${(c.valor / max) * 100}%;background:${esc(cor)}"></i></div></div>`;
-      }).join("") : `<div class="vazio"><strong>Nenhum gasto neste mês</strong>Sincronize o Open Finance em Mais, ou escaneie uma nota.</div>`}
-    </div>
-    ${totalReceitas === 0 ? (ehMesAtual && diaSalario ? `<div class="cartao cartao-compacto"><div class="linha" style="cursor:default;border-top:0;padding:0"><div class="corpo">
-      <div class="titulo">Nenhuma receita ainda este mês</div><div class="meta">${diaSalario >= diaHoje ? `Salário previsto: dia ${diaSalario}` : `O salário caiu no dia ${diaSalario} no mês passado`}</div></div></div></div>` : "") : `<div class="cartao">
-      <h3>Receitas</h3>
-      <div class="linha" style="cursor:default;border-top:0;padding-top:0"><div class="corpo"><div class="titulo num entrada" style="font-size:20px">${Rp(totalReceitas)}</div>
-        <div class="meta">${totalReceitasAnt ? `${nomeMes(ant).split(" ")[0]} inteiro: ${Rp(totalReceitasAnt)}` : "Entradas que são renda: salário, pix recebidos, reembolsos"}</div></div></div>
-      ${recCats.map((c) => {
-        const cor = estado.catPorId[c.id]?.cor ?? "#2a9d8f";
-        return `<div class="barra-cat" data-acao="verReceita" data-id="${c.id ?? ""}">
-          <div class="nome"><span class="ponto" style="background:${esc(cor)}"></span><span>${esc(c.nome)}</span></div>
-          <div class="num">${Rp(c.valor)}<span class="pct">${Math.round((c.valor / (totalReceitas || 1)) * 100)}%</span></div>
-          <div class="trilho"><i style="width:${(c.valor / (recCats[0]?.valor || 1)) * 100}%;background:${esc(cor)}"></i></div></div>`;
-      }).join("")}
-    </div>`}
-    ${bancos.length ? `<div class="cartao">
-      <h3>Saldo nas contas</h3>
-      <div class="linha" style="cursor:default;border-top:0;padding-top:0"><div class="corpo"><div class="titulo num ${saldoTotal < 0 ? "sobe" : ""}" style="font-size:20px">${Rp(Math.abs(saldoTotal), saldoTotal < 0 ? "−" : "")}</div>
-        <div class="meta">Soma das contas correntes · atualizado ${haQuanto(bancos[0].atualizado_em)}</div></div></div>
-      ${bancos.map((c) => `<div class="linha" style="cursor:default"><div class="corpo"><div class="titulo">${esc(c.apelido || c.nome)}</div>
-        ${Number(c.saldo) < 0 ? `<div class="meta"><span class="chip ${c.negativo_em_acordo ? "" : "alerta"}">${c.negativo_em_acordo ? "negativo em acordo" : "usando cheque especial"}</span></div>` : ""}</div>
-        <div class="valor num ${Number(c.saldo) < 0 ? "sobe" : ""}">${Rp(Math.abs(Number(c.saldo)), Number(c.saldo) < 0 ? "−" : "")}</div></div>`).join("")}
-      ${cartoes.map((c) => `<div class="linha" style="cursor:default"><div class="corpo"><div class="titulo">${esc(c.apelido || c.nome)}</div><div class="meta">fatura do cartão</div></div>
-        <div class="valor num neutro">${Rp(Math.abs(Number(c.saldo)))}</div></div>`).join("")}
+
+    ${nSemCat || nNotas ? `<div class="cartao a-fazer"><h3>A fazer</h3>
+      ${nSemCat ? `<button class="acao-linha" data-acao="abrirTriagem">${ICONE.etiqueta}<span class="corpo"><strong>Categorizar ${pl(nSemCat, "lançamento", "lançamentos")}</strong><small>${nSemCatMes ? `${nSemCatMes} em ${nomeM} · ` : ""}${nSemCat} no total, em todos os meses · iguais vêm agrupados</small></span><span class="seta">›</span></button>` : ""}
+      ${nNotas ? `<button class="acao-linha" data-acao="verNotasPendentes">${ICONE.nota}<span class="corpo"><strong>Confirmar ${pl(nNotas, "nota fiscal", "notas fiscais")}</strong><small>sem gasto ligado${total > 0 ? ` · ${Math.round((comNota / total) * 100)}% dos gastos de ${nomeM} têm nota` : ""}</small></span><span class="seta">›</span></button>` : ""}
     </div>` : ""}
+
+    <div class="grade-inicio">
+      <div class="coluna">
+        <div class="cartao cartao-async" id="cartaoMetas" data-acao="irMetas" style="cursor:pointer">${carregandoCartao("Plano do mês")}</div>
+        <div class="cartao cartao-async" id="cartaoSugestoes" data-acao="irSugestoes" style="cursor:pointer">${carregandoCartao("Sugestões")}</div>
+        <div class="cartao cartao-async" id="cartaoEvolucao">
+          <h3>Evolução</h3>
+          <div class="seg seg-peq">${PERIODOS_EVO.map(([k, n]) => `<button data-acao="periodoEvo" data-p="${k}">${n}</button>`).join("")}</div>
+          <p class="nota-texto priv-aviso">Gráfico oculto. Toque no olho para ver.</p>
+          <div class="corpo-evo priv-bloco"><div class="sk-grafico"></div></div>
+        </div>
+      </div>
+      <div class="coluna">
+        <div class="blocos">
+          <button class="bloco neutro" data-acao="irPatrimonio" data-s="dividas">${ICONE.cartao}<span>Dívidas (tudo)</span><strong class="num ${devido > 0 ? "sobe" : ""}">${Rp(devido)}</strong>
+            ${devidoCartoes > 0 ? `<small class="bloco-sub">acordos ${Rp(devidoAcordos)} + cartões ${Rp(devidoCartoes)}</small>` : ""}</button>
+          <button class="bloco neutro" data-acao="irPatrimonio" data-s="investimentos">${ICONE.cofre}<span>Investido</span><strong class="num">${Rp(investido)}</strong><small class="bloco-sub">reserva e aplicações</small></button>
+        </div>
+        <div class="cartao">
+          <h3>Gastos por categoria <span class="sub-h">${nomeM}</span></h3>
+          ${cats.length ? `${cats.slice(0, TOP).map((c) => barraCat(c, total, corBarra(c))).join("")}
+            ${cats.length > TOP ? `<details class="mais-cats"><summary>ver todas as ${cats.length} categorias</summary>${cats.slice(TOP).map((c) => barraCat(c, total, corBarra(c))).join("")}</details>` : ""}
+            ${total > 0 && semClassificacao / total >= 0.1 ? `<p class="nota-texto alerta-texto">${Math.round((semClassificacao / total) * 100)}% dos gastos estão sem classificação real (Sem categoria + Outros). <a href="#" data-acao="abrirTriagem">Categorizar</a></p>` : ""}`
+            : `<div class="vazio"><strong>Nenhum gasto neste mês</strong>Sincronize o Open Finance em Mais, ou escaneie uma nota.</div>`}
+        </div>
+        ${totalReceitas === 0 ? (ehMesAtual && diaSalario ? `<div class="cartao cartao-compacto"><div class="linha" style="cursor:default;border-top:0;padding:0"><div class="corpo">
+          <div class="titulo">Nenhuma receita ainda em ${nomeM}</div><div class="meta">${diaSalario >= diaHoje ? `Salário previsto: dia ${diaSalario}` : `No mês passado o salário caiu no dia ${diaSalario}`}</div></div></div></div>` : "") : `<div class="cartao">
+          <h3>Receitas <span class="sub-h">${nomeM}</span></h3>
+          <div class="linha" style="cursor:default;border-top:0;padding-top:0"><div class="corpo"><div class="titulo num entrada" style="font-size:20px">${Rp(totalReceitas)}</div>
+            <div class="meta">${totalReceitasAnt ? `${nomeAnt} inteiro: ${Rp(totalReceitasAnt)}` : "Salário, Pix recebidos, reembolsos"}</div></div></div>
+          ${recCats.map((c) => `<div class="barra-cat" data-acao="verReceita" data-id="${c.id ?? ""}">
+              <div class="nome"><span>${esc(c.nome)}</span></div>
+              <div class="num">${Rp(c.valor)}<span class="pct">${Math.round((c.valor / (totalReceitas || 1)) * 100)}%</span></div>
+              <div class="trilho"><i style="width:${(c.valor / (recCats[0]?.valor || 1)) * 100}%;background:var(--ok)"></i></div></div>`).join("")}
+        </div>`}
+        ${bancos.length ? `<div class="cartao">
+          <h3>Saldo nas contas <span class="sub-h">agora</span></h3>
+          <div class="linha" style="cursor:default;border-top:0;padding-top:0"><div class="corpo"><div class="titulo num ${saldoTotal < 0 ? "sobe" : ""}" style="font-size:20px">${Rp(Math.abs(saldoTotal), saldoTotal < 0 ? "−" : "")}</div>
+            <div class="meta">Soma das contas correntes · atualizado ${haQuanto(bancos[0].atualizado_em)}</div></div></div>
+          ${bancos.map((c) => `<div class="linha" style="cursor:default"><div class="corpo"><div class="titulo">${esc(c.apelido || c.nome)}</div>
+            ${Number(c.saldo) < 0 ? `<div class="meta"><span class="chip ${c.negativo_em_acordo ? "" : "alerta"}">${c.negativo_em_acordo ? "negativo em acordo" : "usando cheque especial"}</span></div>` : ""}</div>
+            <div class="valor num ${Number(c.saldo) < 0 ? "sobe" : ""}">${Rp(Math.abs(Number(c.saldo)), Number(c.saldo) < 0 ? "−" : "")}</div></div>`).join("")}
+          ${cartoes.map((c) => `<div class="linha" style="cursor:default"><div class="corpo"><div class="titulo">${esc(c.apelido || c.nome)}</div><div class="meta">fatura do cartão · a pagar</div></div>
+            <div class="valor num devido">${Rp(Math.abs(Number(c.saldo)), "−")}</div></div>`).join("")}
+        </div>` : ""}
+      </div>
+    </div>
     <p class="nota-texto rodape-sync">${sync ? `Dados do banco atualizados ${haQuanto(sync.fim ?? sync.inicio)}${sync.ok === false ? ` · <span class="erro-texto">a última sincronização falhou</span>` : ""}` : "Banco ainda não sincronizado"} · <a href="#mais" data-acao="irOpenFinance">Open Finance</a></p>`;
   carregarResumoMetas();
   carregarEvolucao();
   carregarResumoSugestoes();
 }
+/** Esqueleto de um cartão que carrega depois (mantém a altura e evita "buracos" ao rolar). */
+function carregandoCartao(titulo) { return `<h3>${esc(titulo)}</h3><div class="sk-linhas"><i></i><i></i><i></i></div>`; }
 // ---------- Gráfico de evolução (despesas, receitas, investimentos)
 const SERIES_EVO = [
   { k: "despesas", nome: "Despesas", cls: "s-desp" },
@@ -506,11 +520,12 @@ function baldesEvolucao(dd, periodo) {
   const hoje = dd.hoje;
   let baldes;
   if (periodo === "12m" || periodo === "6m") {
+    // Só meses completos: o mês corrente, recém-começado, pareceria uma queda
     const n = periodo === "12m" ? 12 : 6;
     baldes = Array.from({ length: n }, (_, i) => {
-      const m = somarMes(mesAtual(), i - n + 1);
-      const fim = i === n - 1 ? hoje : somarDias(somarMes(m, 1) + "-01", -1);
-      return { ini: m + "-01", fim, rot: maiuscula(nomeMes(m).split(" ")[0].slice(0, 3)), dica: maiuscula(nomeMes(m)) + (i === n - 1 ? " (até hoje)" : "") };
+      const m = somarMes(mesAtual(), i - n);
+      const fim = somarDias(somarMes(m, 1) + "-01", -1);
+      return { ini: m + "-01", fim, rot: maiuscula(nomeMes(m).split(" ")[0].slice(0, 3)), dica: maiuscula(nomeMes(m)) };
     });
   } else if (periodo === "3m") {
     baldes = Array.from({ length: 13 }, (_, i) => {
@@ -536,7 +551,11 @@ function baldesEvolucao(dd, periodo) {
     for (const h of dd.invest) { if (h.dia <= b.fim) ult = Number(h.saldo_liquido); else break; }
     return ult;
   });
-  return { baldes, acumulado, series: { despesas: desp, receitas: rec, invest: inv } };
+  // Investimentos muito pequenos perto das despesas só fariam uma linha colada no zero
+  const maxFluxo = Math.max(...desp, ...rec, 1);
+  const maxInv = Math.max(0, ...inv.filter((v) => v != null));
+  const semInvest = maxInv < maxFluxo * 0.03;
+  return { baldes, acumulado, semInvest, maxInv, series: { despesas: desp, receitas: rec, invest: semInvest ? inv.map(() => null) : inv } };
 }
 
 function fmtEixo(v) {
@@ -566,7 +585,7 @@ function graficoEvolucao(ev) {
   const idxRot = n <= 6 ? [...Array(n).keys()] : [0, Math.round((n - 1) / 3), Math.round((2 * (n - 1)) / 3), n - 1];
   const dados = esc(JSON.stringify(ev.baldes.map((b, i) => ({ x: x(i), d: b.dica, v: SERIES_EVO.map((s) => ev.series[s.k][i]), y: SERIES_EVO.map((s) => ev.series[s.k][i] == null ? null : y(ev.series[s.k][i])) }))));
   return `
-    <div class="legenda-evo">${SERIES_EVO.map((s) => `<span><i class="${s.cls}"></i>${s.nome}</span>`).join("")}</div>
+    <div class="legenda-evo">${SERIES_EVO.filter((s) => !(s.k === "invest" && ev.semInvest)).map((s) => `<span><i class="${s.cls}"></i>${s.nome}</span>`).join("")}</div>
     <div class="grafico-evo" data-pontos="${dados}" data-w="${W}">
     <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Despesas, receitas e investimentos no período">
       ${ticks.map((t) => `<line x1="${pe}" x2="${W - pd}" y1="${y(t)}" y2="${y(t)}" class="grade"/><text x="${pe - 6}" y="${y(t) + 4}" text-anchor="end" class="eixo">${fmtEixo(t)}</text>`).join("")}
@@ -577,7 +596,8 @@ function graficoEvolucao(ev) {
       <rect x="0" y="0" width="${W}" height="${H}" fill="transparent"/>
     </svg>
     <div class="dica dica-evo" hidden></div></div>
-    <p class="nota-texto" style="margin:6px 0 0">${ev.acumulado ? "Despesas e receitas somadas desde o início do período." : `Despesas e receitas somadas por ${n === 13 ? "semana" : "mês"}.`} Investimentos: saldo no fim de cada ${ev.acumulado ? "dia" : n === 13 ? "semana" : "mês"}${ev.series.invest.some((v) => v == null) ? " (o histórico começa na primeira sincronização)" : ""}.</p>`;
+    <p class="nota-texto" style="margin:6px 0 0">${ev.acumulado ? "Despesas e receitas somadas desde o início do período (últimos 30 dias)." : n === 13 ? "Despesas e receitas somadas por semana." : "Despesas e receitas por mês, só meses completos (o mês atual fica de fora até terminar)."}
+      ${ev.semInvest ? `Investimentos (${R(ev.maxInv)}) ficam fora: perto das despesas seriam uma linha no zero.` : `Investimentos: saldo no fim de cada ${ev.acumulado ? "dia" : n === 13 ? "semana" : "mês"}${ev.series.invest.some((v) => v == null) ? " (o histórico começa na primeira sincronização)" : ""}.`}</p>`;
 }
 
 function ativarGraficoEvolucao(g) {
@@ -629,15 +649,13 @@ async function carregarResumoSugestoes() {
     const d = await obterSugestoes();
     if (!$("#cartaoSugestoes")) return;
     const top = d.sugestoes.filter((x) => x.tipo !== "dica").slice(0, 3);
-    const bloco = $("#blocoSug");
-    if (bloco) bloco.innerHTML = d.economia_potencial > 0 ? `${Rp(d.economia_potencial)}<small>/mês</small>` : "em dia";
     const comp = d.economia_composicao ?? [];
-    el.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">Sugestões</h3><span class="chip">ver todas ›</span></div>
+    const mesesRef = (d.referencia?.meses ?? []).map((m) => nomeMes(m).split(" ")[0].slice(0, 3)).join(", ");
+    el.innerHTML = `<div class="cab-cartao"><h3>Sugestões <span class="sub-h">média de ${esc(mesesRef || "3 meses")}</span></h3><span class="chip acao">ver todas ›</span></div>
       ${d.economia_potencial > 0 ? `<div class="valor num desce" style="font-size:22px;font-weight:700;margin-top:6px">${Rp(d.economia_potencial)}<span class="nota-texto" style="font-weight:400"> por mês de economia possível</span></div>
       ${comp.length ? `<div class="nota-texto priv-bloco">= ${comp.map((c, i) => `${i ? (c.valor < 0 ? " − " : " + ") : ""}${esc(c.titulo)} (${R(Math.abs(c.valor))})`).join("")}</div>` : ""}` : ""}
       <p class="nota-texto priv-aviso">Sugestões ocultas. Toque no olho para ver.</p><ul class="lista priv-bloco">${top.map((x) => `<li class="linha" style="cursor:pointer"><span class="icone-sug ${x.tipo}">${ICONES_SUG[x.tipo]}</span><div class="corpo"><div class="titulo">${esc(x.titulo)}</div>${chipValorSugestao(x, true)}</div></li>`).join("")}</ul>`;
   } catch (e) {
-    const bloco = $("#blocoSug"); if (bloco) bloco.textContent = "abrir";
     el.innerHTML = `<h3>Sugestões</h3><p class="nota-texto">Não consegui analisar agora (${esc(e.message)}).</p>`;
   }
 }
@@ -647,7 +665,7 @@ acoes.irOpenFinance = () => { estado.abrirOpenFinance = true; irPara("mais"); };
 function chipValorSugestao(x, compacto = false) {
   if (x.economia_mensal && x.no_total) return compacto ? `<div class="meta num desce">economia de ${Rp(x.economia_mensal)}/mês</div>` : `<span class="chip ok" style="margin-left:auto">economia ${Rp(x.economia_mensal)}/mês</span>`;
   if (x.impacto_mensal) {
-    const rot = x.id === "deficit" ? "faltam" : x.id === "acima-ideal" ? "acima" : "a mais";
+    const rot = x.id === "deficit" ? "faltam na média" : x.id === "acima-ideal" ? "acima do ideal" : "a mais";
     return compacto ? `<div class="meta num sobe">${rot} ${Rp(x.impacto_mensal)}/mês</div>` : `<span class="chip alerta" style="margin-left:auto">${rot} ${Rp(x.impacto_mensal)}/mês</span>`;
   }
   return "";
@@ -2378,7 +2396,7 @@ const mesAno = (d) => { const [a, m] = d.split("-"); return `${m}/${a}`; };
 
 async function telaMetas() {
   const aba = estado.abaMetas ?? "mes";
-  const mes = estado.mesMetas ?? mesAtual();
+  const mes = estado.mes > mesAtual() ? mesAtual() : estado.mes;   // o mesmo mês do Início (o plano vai até o mês atual)
   const seletor = aba === "mes" ? `<div class="seletor-mes"><button data-acao="mesMetasAnterior" aria-label="Mês anterior">‹</button><span>${mesCurto(mes)}</span><button data-acao="mesMetasSeguinte" aria-label="Próximo mês" ${mes >= mesAtual() ? "disabled" : ""}>›</button></div>` : "";
   app.innerHTML = `<div class="topo"><h1>Metas</h1>${botaoOlho()}${seletor}</div>
     <div class="seg">${[["mes", "Mês"], ["acordos", "Acordos"], ["objetivos", "Objetivos"]].map(([k, n]) =>
@@ -2396,8 +2414,8 @@ async function telaMetas() {
 }
 acoes.abaMetas = (el) => { estado.abaMetas = el.dataset.s; recarregar(); };
 acoes.irMetas = (el) => { estado.abaMetas = el?.dataset?.s || estado.abaMetas || "mes"; irPara("metas"); };
-acoes.mesMetasAnterior = () => { estado.mesMetas = somarMes(estado.mesMetas ?? mesAtual(), -1); recarregar(); };
-acoes.mesMetasSeguinte = () => { const m = somarMes(estado.mesMetas ?? mesAtual(), 1); if (m <= mesAtual()) { estado.mesMetas = m; recarregar(); } };
+acoes.mesMetasAnterior = () => { estado.mes = somarMes(estado.mes > mesAtual() ? mesAtual() : estado.mes, -1); recarregar(); };
+acoes.mesMetasSeguinte = () => { const m = somarMes(estado.mes, 1); if (m <= mesAtual()) { estado.mes = m; recarregar(); } };
 
 function linhaConta(c) {
   const difere = c.status === "pago" && c.pago_valor && Math.abs(c.pago_valor - c.valor) > c.valor * 0.05;
@@ -2420,9 +2438,9 @@ function htmlMes(d) {
   const nomeM = nomeMes(d.mes).split(" ")[0];
   return `
     <div class="cartao destaque">
-      <div class="nota-texto">${d.historico ? `Resultado planejado para ${nomeMes(d.mes)}` : `Resultado previsto em ${nomeMes(d.mes)}`}</div>
+      <div class="nota-texto">${d.historico ? `Resultado planejado para ${nomeMes(d.mes)}` : `Previsão do plano para o fim de ${nomeMes(d.mes)}`}</div>
       <div class="valor num ${r.previsto < 0 ? "sobe" : "desce"}">${Rp(Math.abs(r.previsto), sinal(r.previsto))}</div>
-      <div class="compara">Renda planejada ${Rp(r.renda_plano)} − orçamento ${R(r.metas_total)} − acordos ${Rp(r.acordos_mes)}</div>
+      <div class="compara">Renda planejada ${Rp(r.renda_plano)} − orçamento ${R(r.metas_total)} − acordos ${Rp(r.acordos_mes)}. É a meta do mês; o resultado do que já aconteceu fica no Início.</div>
       <div class="compara">${d.historico ? `No mês todo` : "Até hoje"}: entrou ${Rp(r.receitas_real)} · gastos ${R(r.gasto_real)} · acordos pagos ${Rp(r.acordos_pagos)}</div>
     </div>
     <div class="cartao cartao-compacto">
@@ -2610,29 +2628,38 @@ acoes.removerItemOrcamento = async (el) => {
   } catch (e) { avisar(e.message, true); }
 };
 
-/** Resumo das metas no Início. */
+/** Resumo das metas no Início: sempre do mês escolhido no topo (o plano só existe até o mês atual). */
+const ICONE_LINHA = {
+  ok: `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></svg>`,
+  alerta: `<svg viewBox="0 0 24 24"><path d="M12 3 2 20h20z"/><path d="M12 10v4M12 17v.5"/></svg>`,
+  calendario: `<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>`,
+  tarefa: `<svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="4"/><path d="M8 12h8M8 8h8M8 16h5"/></svg>`,
+};
 async function carregarResumoMetas() {
   const el = $("#cartaoMetas");
   if (!el) return;
+  const mesPedido = estado.mes > mesAtual() ? mesAtual() : estado.mes;
   try {
-    const d = await obterMetas();
+    const d = await obterMetas(false, mesPedido);
     if (!$("#cartaoMetas")) return;
     estado.metas = d;
     const r = d.resultado;
+    const nomeM = nomeMes(d.mes).split(" ")[0];
     const pend = d.contas.filter((c) => c.status !== "pago");
     const atrasadas = d.contas.filter((c) => c.status === "atrasado");
     const prox = pend.filter((c) => c.data).sort((a, b) => a.data.localeCompare(b.data))[0];
-    const tarefas = d.objetivos.filter((o) => o.tipo === "tarefa" && !o.concluido_em && o.data_alvo && o.data_alvo <= somarDiasISO(d.hoje, 7));
-    el.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">Metas do mês</h3><span class="chip">abrir ›</span></div>
-      <div class="plano-rotulo" style="margin-top:8px"><span>Resultado previsto</span><span class="num"><strong class="${r.previsto < 0 ? "sobe" : "desce"}">${Rp(Math.abs(r.previsto), sinal(r.previsto))}</strong></span></div>
-      ${barraPlano("Orçamento usado", r.gasto_real, r.metas_total, r.gasto_real > r.metas_total ? "var(--alerta)" : "var(--acento)", false, true, "meta")}
-      <ul class="lista">
-        ${atrasadas.length ? `<li class="linha"><span class="status-conta atrasado">!</span><div class="corpo"><div class="titulo">${atrasadas.length} conta${atrasadas.length > 1 ? "s" : ""} atrasada${atrasadas.length > 1 ? "s" : ""}</div><div class="meta priv-bloco">${atrasadas.map((c) => esc(c.nome)).join(", ")}</div></div></li>` : ""}
-        <li class="linha"><span class="status-conta ${pend.length ? "pendente" : "pago"}">${pend.length ? "○" : "✓"}</span><div class="corpo"><div class="titulo">${pend.length ? `${pend.length} conta${pend.length > 1 ? "s" : ""} a pagar` : "Todas as contas do mês pagas"}</div>${prox ? `<div class="meta priv-bloco">próxima: ${esc(prox.nome)} · ${dataCurta(prox.data).slice(0, 5)}</div>` : ""}</div></li>
-        ${tarefas.length ? `<li class="linha"><span class="status-conta hoje">•</span><div class="corpo"><div class="titulo">${tarefas.length} tarefa${tarefas.length > 1 ? "s" : ""} para esta semana</div><div class="meta priv-bloco">${esc(tarefas[0].titulo)}</div></div></li>` : ""}
+    const tarefas = d.historico ? [] : d.objetivos.filter((o) => o.tipo === "tarefa" && !o.concluido_em && o.data_alvo && o.data_alvo <= somarDiasISO(d.hoje, 7));
+    el.innerHTML = `<div class="cab-cartao"><h3>Plano de ${nomeM}${d.mes !== estado.mes ? ` <span class="sub-h">(${nomeM} é o mês atual)</span>` : ""}</h3><span class="chip acao">abrir ›</span></div>
+      <div class="plano-rotulo" style="margin-top:8px"><span>${d.historico ? "Resultado planejado" : "Previsão do plano no fim do mês"}</span><span class="num"><strong class="${r.previsto < 0 ? "sobe" : "desce"}">${Rp(Math.abs(r.previsto), sinal(r.previsto))}</strong></span></div>
+      <p class="nota-texto" style="margin:2px 0 8px">Renda planejada − orçamento − parcelas dos acordos. É uma meta, não o que já aconteceu (isso está no topo).</p>
+      ${barraPlano(`Orçamento usado${d.historico ? "" : " até hoje"}`, r.gasto_real, r.metas_total, r.gasto_real > r.metas_total ? "var(--alerta)" : "var(--acento)", false, true, "meta")}
+      <ul class="lista resumo-plano">
+        ${atrasadas.length ? `<li class="linha"><span class="icone-linha ruim">${ICONE_LINHA.alerta}</span><div class="corpo"><div class="titulo">${pl(atrasadas.length, "conta atrasada", "contas atrasadas")}</div><div class="meta priv-bloco">${atrasadas.map((c) => esc(c.nome)).join(", ")}</div></div></li>` : ""}
+        <li class="linha"><span class="icone-linha ${pend.length ? "" : "bom"}">${pend.length ? ICONE_LINHA.calendario : ICONE_LINHA.ok}</span><div class="corpo"><div class="titulo">${pend.length ? `${pl(pend.length, "conta a pagar", "contas a pagar")}` : `Todas as contas de ${nomeM} pagas`}</div>${prox ? `<div class="meta priv-bloco">próxima: ${esc(prox.nome)} · ${dataCurta(prox.data).slice(0, 5)}</div>` : ""}</div></li>
+        ${tarefas.length ? `<li class="linha"><span class="icone-linha">${ICONE_LINHA.tarefa}</span><div class="corpo"><div class="titulo">${pl(tarefas.length, "tarefa", "tarefas")} para esta semana</div><div class="meta priv-bloco">${esc(tarefas[0].titulo)}</div></div></li>` : ""}
       </ul>`;
   } catch (e) {
-    el.innerHTML = `<h3>Metas do mês</h3><p class="nota-texto">Não consegui carregar (${esc(e.message)}).</p>`;
+    el.innerHTML = `<h3>Plano do mês</h3><p class="nota-texto">Não consegui carregar (${esc(e.message)}).</p>`;
   }
 }
 function somarDiasISO(dia, n) { const d = new Date(dia + "T12:00:00"); d.setDate(d.getDate() + n); return isoDia(d); }
