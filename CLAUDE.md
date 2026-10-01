@@ -58,3 +58,13 @@ App de controle financeiro doméstico do Rique (e da esposa). Tudo em português
 
 ## Análises
 Ver `docs/BASE.md` para as visões e consultas prontas.
+
+## UX v1.12 (01/10/2026)
+- Extrato: "Dia a dia" (receitas − despesas de consumo) e "Depois das dívidas" (− categoria "Pagamento de dívida"). Lançamentos com data futura ficam em "agendados", fora das somas (Início, Extrato e `/metas` usam `data <= hoje`).
+- Nomes: `nomeLimpo()` no app (tira parcela, sufixo LTDA, caixa alta → normal). Apelidos de estabelecimento ficam em `preferencias.apelidos` (JSON `{chaveNome: apelido}`, chave = nome sem números como `chaveAprendizado`).
+- Triagem de "sem categoria": agrupa por `chaveAprendizado(descricao + recebedor)` e chama `POST /categorizar-lote {transacao_ids, categoria_id, aprender}`.
+- Lançamento manual: botão "+" → transação `id = manual-<uuid>`, `tipo_operacao = MANUAL`, conta "Dinheiro" `manual-dinheiro-<casa>` (tipo CASH, sem item da Pluggy).
+- `/metas {mes}` aceita mês passado (calcula como no último dia dele; `historico: true`).
+- Sugestões: `economia_mensal` + `no_total` = entra no "economia possível" (lista em `economia_composicao`); déficit e "acima do ideal" usam `impacto_mensal` (laranja, não somam).
+- `todos()`/`todas()` sempre ordenam ao paginar (sem ORDER BY as páginas podem repetir/pular linhas).
+- Robô: sessão reaproveitada por casa (pedidos simultâneos) e nova tentativa em "JWT issued at future".
