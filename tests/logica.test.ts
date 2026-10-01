@@ -572,3 +572,20 @@ test("metas: pagamento abaixo do previsto (mas acima de 60%) conta como pago", (
   assert.equal(c.status, "pago");
   assert.equal(c.pago_valor, 210);
 });
+
+test("regra 'sem categoria' vence as outras e deixa o lançamento para classificar à mão", async () => {
+  const { categorizarTransacao, compilarRegras, regraSemCategoria } = await import("../supabase/functions/api/lib/categorizar.ts");
+  const rg = compilarRegras([
+    { id: 1, alvo: "transacao", tipo: "regex", padrao: "LAYNARA", categoria_id: 7, prioridade: 1, sentido: "saida" },
+    { id: 2, alvo: "transacao", tipo: "exato", padrao: "TRANSFERENCIA ENVIADA LAYNARA DOS SANTOS LIMBERGER", categoria_id: 8, prioridade: 1, sentido: "saida" },
+    { id: 3, alvo: "transacao", tipo: "regex", padrao: "LAYNARA", categoria_id: null, prioridade: 2, sentido: null },
+    { id: 4, alvo: "transacao", tipo: "regex", padrao: "ZAFFARI", categoria_id: 9, prioridade: 5, sentido: null },
+  ] as any);
+  const tx = { descricao: "Transferência enviada|Laynara dos Santos Limberger", sentido: "saida" as const, tipo_operacao: "PIX" };
+  const r = categorizarTransacao(tx, rg, {});
+  assert.equal(r?.categoria_id, null);
+  assert.equal(r?.regra_id, 3);
+  assert.ok(regraSemCategoria(tx, rg));
+  assert.equal(categorizarTransacao({ descricao: "Compra|ZAFFARI", sentido: "saida" }, rg, {})?.categoria_id, 9);
+  assert.equal(regraSemCategoria({ descricao: "Compra|ZAFFARI", sentido: "saida" }, rg), null);
+});

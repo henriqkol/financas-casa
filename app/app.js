@@ -970,6 +970,8 @@ async function abrirTransacao(id) {
   const chave = chaveNome(t.descricao);
   const futuro = t.data > hojeISO();
   estado.txAberta = t;
+  await carregarRegrasNulas();
+  const umAUm = bateRegraNula(t);
 
   abrirFolha(`
     <h2 style="margin-right:40px">${esc(tituloTx(t))}</h2>
@@ -986,7 +988,8 @@ async function abrirTransacao(id) {
     <div class="cartao" style="margin-top:8px">
       <h3>Categoria <span class="salvo" id="salvoCat"></span></h3>
       ${seletorCategoria(t.categoria_id, `id="catTx" data-muda="categoriaTx" data-id="${esc(t.id)}"`, t.sentido)}
-      <label class="check"><input type="checkbox" id="aprenderTx" checked> Usar também nos lançamentos parecidos (mesma descrição)</label>
+      ${umAUm ? `<p class="nota-texto">Há uma regra “sem categoria” para este texto: a categoria vale só para este lançamento e o app não aprende com ela.</p>`
+        : `<label class="check"><input type="checkbox" id="aprenderTx" checked> Usar também nos lançamentos parecidos (mesma descrição)</label>`}
       ${t.nota_transacao.length ? `<p class="nota-texto">Este gasto tem nota fiscal: nos resumos, o valor é dividido pelas categorias dos itens.</p>` : ""}
     </div>
     ${chave ? `<div class="cartao">
@@ -1060,7 +1063,7 @@ mudancas.categoriaTx = async (el) => {
       await q(sb.from("transacoes").update({ categoria_id: null, categoria_origem: null }).eq("id", el.dataset.id));
       marcarSalvo("salvoCat", "Categoria removida ✓");
     } else {
-      const r = await fn("/categorizar-transacao", { transacao_id: el.dataset.id, categoria_id: cat, aprender: $("#aprenderTx").checked });
+      const r = await fn("/categorizar-transacao", { transacao_id: el.dataset.id, categoria_id: cat, aprender: $("#aprenderTx")?.checked ?? false });
       marcarSalvo("salvoCat", r.outros_atualizados ? `Salvo ✓ · mais ${pl(r.outros_atualizados, "parecido", "parecidos")}` : "Salvo ✓");
     }
     estado.folhaSujou = true; cacheBusca = null; cacheSugestoes = null; cacheMetas = null;
@@ -1130,6 +1133,19 @@ async function contarSemCategoria() {
   return count ?? 0;
 }
 
+// ------------------------------------------------------------------ REGRAS "SEM CATEGORIA"
+// Estabelecimentos/pessoas que o usuário quer classificar um a um (sem aprender nem aplicar aos parecidos).
+async function carregarRegrasNulas() {
+  if (estado.regrasNulas) return estado.regrasNulas;
+  const lista = await q(sb.from("regras_categoria").select("tipo, padrao, sentido").is("categoria_id", null).eq("alvo", "transacao")).catch(() => []);
+  estado.regrasNulas = lista.map((r) => { let re = null; if (r.tipo === "regex") { try { re = new RegExp(r.padrao); } catch { /* inválida */ } } return { ...r, re }; });
+  return estado.regrasNulas;
+}
+function bateRegraNula(t) {
+  const texto = [t.descricao, t.recebedor_nome].filter(Boolean).join(" ");
+  return (estado.regrasNulas ?? []).some((r) => (!r.sentido || r.sentido === t.sentido) && (r.tipo === "exato" ? chaveTexto(texto) === r.padrao : r.re?.test(normalizar(texto))));
+}
+
 // ------------------------------------------------------------------ TRIAGEM (categorizar em sequência)
 // Lançamentos sem categoria agrupados pela descrição (a mesma chave que o servidor usa para aprender),
 // um grupo por vez, com as categorias mais prováveis como botões.
@@ -1147,10 +1163,12 @@ acoes.abrirTriagem = async () => {
       todas(() => sb.from("transacoes").select("descricao, recebedor_nome, sentido, categoria_id").eq("removida", false).not("categoria_id", "is", null)
         .gte("data", somarMes(mesAtual(), -12) + "-01")),
     ]);
+    await carregarRegrasNulas();
     const grupos = new Map();
     for (const t of semCat) {
-      const k = `${t.sentido}|${chaveTexto([t.descricao, t.recebedor_nome].filter(Boolean).join(" "))}`;
-      const g = grupos.get(k) ?? { chave: k, sentido: t.sentido, txs: [], total: 0 };
+      const umAUm = bateRegraNula(t);
+      const k = umAUm ? `${t.sentido}|um:${t.id}` : `${t.sentido}|${chaveTexto([t.descricao, t.recebedor_nome].filter(Boolean).join(" "))}`;
+      const g = grupos.get(k) ?? { chave: k, sentido: t.sentido, txs: [], total: 0, umAUm };
       g.txs.push(t); g.total += Number(t.valor);
       grupos.set(k, g);
     }
@@ -1176,7 +1194,8 @@ acoes.abrirTriagem = async () => {
 
 function sugestoesTriagem(g) {
   const tr = estado.triagem;
-  const k = g.chave.slice(g.chave.indexOf("|") + 1);
+  const t0 = g.txs[0];
+  const k = g.umAUm ? chaveTexto([t0.descricao, t0.recebedor_nome].filter(Boolean).join(" ")) : g.chave.slice(g.chave.indexOf("|") + 1);
   const pontos = new Map();
   for (const p of palavrasChave(k)) {
     const m = tr.porPalavra.get(`${g.sentido}|${p}`);
@@ -1216,8 +1235,8 @@ function mostrarGrupoTriagem() {
     <h3 style="margin:14px 0 8px">${comBase ? "Categorias mais prováveis" : "Categorias mais usadas"}</h3>
     <div class="botoes-cat">${lista.map((c) => `<button class="botao-cat" data-acao="aplicarTriagem" data-cat="${c.id}"><span class="ponto" style="background:${esc(c.cor)}"></span>${esc(c.nome)}</button>`).join("")}</div>
     <label class="campo" style="margin-top:10px"><span>Outra categoria</span>${seletorCategoria(null, `id="triagemOutra" data-muda="triagemOutra"`, g.sentido)}</label>
-    ${n > 1 ? `<label class="check"><input type="checkbox" id="triagemTodos" checked> Aplicar aos ${n} lançamentos deste grupo</label>` : ""}
-    <label class="check"><input type="checkbox" id="triagemAprender" checked> Aprender para os próximos lançamentos parecidos</label>
+    ${g.umAUm ? `<p class="nota-texto">Regra “sem categoria”: este é classificado sozinho, sem mudar os outros nem aprender.</p>` : `${n > 1 ? `<label class="check"><input type="checkbox" id="triagemTodos" checked> Aplicar aos ${n} lançamentos deste grupo</label>` : ""}
+    <label class="check"><input type="checkbox" id="triagemAprender" checked> Aprender para os próximos lançamentos parecidos</label>`}
     <div class="botoes"><button class="botao sec" data-acao="pularTriagem">Pular</button>${tr.i > 0 ? `<button class="botao sec" data-acao="voltarTriagem">Voltar</button>` : ""}</div>`);
 }
 async function aplicarTriagem(cat) {
@@ -1227,7 +1246,7 @@ async function aplicarTriagem(cat) {
   const ids = todos ? g.txs.map((t) => t.id) : [g.txs[0].id];
   $("#folha .painel")?.classList.add("ocupado");
   try {
-    const r = await fn("/categorizar-lote", { transacao_ids: ids, categoria_id: cat, aprender: $("#triagemAprender")?.checked ?? true });
+    const r = await fn("/categorizar-lote", { transacao_ids: ids, categoria_id: cat, aprender: g.umAUm ? false : ($("#triagemAprender")?.checked ?? true) });
     tr.feitos++; tr.lancamentos += ids.length;
     estado.folhaSujou = true; cacheBusca = null; cacheSugestoes = null; cacheMetas = null;
     avisar(`${estado.catPorId[cat]?.nome}: ${pl(ids.length, "lançamento", "lançamentos")}${r.outros_atualizados ? ` + ${pl(r.outros_atualizados, "parecido", "parecidos")}` : ""}`);
@@ -1876,9 +1895,10 @@ async function telaMais() {
     q(sb.from("contas").select("*").order("tipo").order("nome")),
     q(sb.from("sync_log").select("*").order("inicio", { ascending: false }).limit(8)),
     q(sb.from("membros").select("*").order("criado_em")).then((l) => l.filter((m) => !ehRobo(m.email))),
-    q(sb.from("regras_categoria").select("id, alvo, tipo, padrao, origem, categoria_id").neq("origem", "sistema").order("criado_em", { ascending: false }).limit(200)),
+    todas(() => sb.from("regras_categoria").select("id, alvo, tipo, padrao, origem, categoria_id, criado_em").order("criado_em", { ascending: false }).order("id")),
   ]);
   const ultimo = logs[0];
+  estado.regrasLista = regras;
   if (navigator.onLine) {
     const casas = await q(sb.rpc("minhas_casas")).catch(() => null);
     if (casas) guardarCasa({ ...estado.casa, casas, nome: casas.find((c) => c.id === estado.casa.casa_id)?.nome ?? estado.casa.nome });
@@ -1954,14 +1974,14 @@ async function telaMais() {
       <label class="campo"><span>Quando a descrição contém</span><input type="text" id="regraTexto" placeholder="Ex.: PIX TRANSF MARIA"></label>
       <div style="display:flex;gap:8px">
         <label class="campo" style="flex:1"><span>Em</span><select id="regraAlvo"><option value="transacao">Lançamentos do banco</option><option value="item">Itens de nota</option></select></label>
-        <label class="campo" style="flex:1"><span>Categoria</span>${seletorCategoria(null, `id="regraCat"`)}</label>
+        <label class="campo" style="flex:1"><span>Categoria</span>${seletorCategoria(null, `id="regraCat"`).replace(`<option value="">Sem categoria</option>`, `<option value="">Sem categoria (classificar à mão)</option>`)}</label>
       </div>
+      <p class="nota-texto" style="margin-top:-4px">Com <strong>Sem categoria</strong>, o que tiver esse texto nunca é classificado sozinho: fica no “A fazer” para você escolher a categoria de cada um, e o app não aprende com essas escolhas.</p>
       <div class="botoes" style="margin-top:0"><button class="botao peq" data-acao="criarRegra">Criar regra</button>
       <button class="botao peq sec" data-acao="reaplicarRegras">Reaplicar regras a tudo</button></div>
-      ${regras.length ? `<h3 style="margin-top:18px">Regras suas e aprendidas (${regras.length})</h3><ul class="lista">${regras.map((r) => `
-        <li class="linha" style="cursor:default"><div class="corpo"><div class="titulo">${esc(r.tipo === "exato" ? r.padrao : r.padrao.replace(/\\/g, ""))}</div>
-        <div class="meta">${r.alvo === "item" ? "item de nota" : "lançamento"} · ${r.origem} ${chipCategoria(r.categoria_id)}</div></div>
-        <button class="botao peq sec" data-acao="apagarRegra" data-id="${r.id}" aria-label="Apagar regra">✕</button></li>`).join("")}</ul>` : ""}
+      <div class="busca" style="margin-top:16px"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <input type="search" id="buscaRegra" placeholder="Buscar regra por texto ou categoria" autocomplete="off"></div>
+      <div id="listaRegras">${htmlListaRegras("")}</div>
     </div></details>
 
     <details class="secao"><summary>Categorização com IA (opcional)</summary><div class="conteudo">
@@ -1993,6 +2013,8 @@ async function telaMais() {
       <button class="botao peq sec" data-acao="sair">Sair</button></div></div>`;
   montarCartaoBloqueio();
   montarCartaoNotificacoes();
+  const campoRegra = $("#buscaRegra");
+  if (campoRegra) { let t; campoRegra.addEventListener("input", () => { clearTimeout(t); t = setTimeout(() => { $("#listaRegras").innerHTML = htmlListaRegras(campoRegra.value); }, 150); }); }
   if (estado.abrirCategorias) { estado.abrirCategorias = false; $("#secaoCategorias")?.scrollIntoView({ block: "start" }); }
   if (estado.abrirOpenFinance) { estado.abrirOpenFinance = false; $("#secaoOpenFinance")?.scrollIntoView({ block: "start" }); }
 }
@@ -2030,17 +2052,38 @@ mudancas.apelidoConta = async (el) => {
   try { await q(sb.from("contas").update({ apelido: el.value.trim() || null }).eq("id", el.dataset.id)); avisar("Apelido salvo"); }
   catch (e) { avisar(e.message, true); }
 };
+const ORIGENS_REGRA = { sistema: "do app", usuario: "sua", aprendida: "aprendida", ia: "pela IA" };
+/** Lista de regras: sem busca, as suas e as aprendidas; com busca, todas (inclusive as que vêm com o app). */
+function htmlListaRegras(busca) {
+  const todasRegras = estado.regrasLista ?? [];
+  const termos = normalizar(busca).split(" ").filter(Boolean);
+  const texto = (r) => r.tipo === "exato" ? r.padrao : r.padrao.replace(/\\b/g, "").replace(/\\(.)/g, "$1");
+  const lista = termos.length
+    ? todasRegras.filter((r) => { const t = normalizar([texto(r), r.categoria_id == null ? "sem categoria" : estado.catPorId[r.categoria_id]?.nome, ORIGENS_REGRA[r.origem]].join(" ")); return termos.every((p) => t.includes(p)); })
+    : todasRegras.filter((r) => r.origem !== "sistema");
+  const MAX = 300;
+  if (!lista.length) return `<p class="nota-texto">${termos.length ? `Nenhuma regra com “${esc(busca)}”.` : "Você ainda não criou regras (as do app aparecem ao buscar)."}</p>`;
+  return `<h3 style="margin-top:14px">${termos.length ? `${pl(lista.length, "regra encontrada", "regras encontradas")}` : `Regras suas e aprendidas (${lista.length})`}</h3>
+    <ul class="lista">${lista.slice(0, MAX).map((r) => `
+      <li class="linha" style="cursor:default"><div class="corpo"><div class="titulo">${esc(texto(r))}</div>
+      <div class="meta">${r.alvo === "item" ? "item de nota" : "lançamento"} · ${ORIGENS_REGRA[r.origem] ?? esc(r.origem)} ${r.categoria_id == null ? `<span class="chip alerta">fica sem categoria</span>` : chipCategoria(r.categoria_id)}</div></div>
+      <button class="botao peq sec" data-acao="apagarRegra" data-id="${r.id}" aria-label="Apagar regra">✕</button></li>`).join("")}</ul>
+    ${lista.length > MAX ? `<p class="nota-texto">Mostrando ${MAX} de ${lista.length}. Refine a busca.</p>` : ""}`;
+}
 acoes.criarRegra = async () => {
   const texto = normalizar($("#regraTexto").value);
-  const cat = Number($("#regraCat").value);
-  if (!texto || !cat) return avisar("Preencha o texto e escolha a categoria", true);
+  const cat = $("#regraCat").value ? Number($("#regraCat").value) : null;   // vazio = regra "sem categoria"
+  if (!texto) return avisar("Preencha o texto da regra", true);
   const padrao = texto.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   try {
-    const nat = estado.categorias.find((c) => c.id === cat)?.natureza;
+    const nat = cat != null ? estado.categorias.find((c) => c.id === cat)?.natureza : null;
     const sentido = $("#regraAlvo").value === "transacao" ? (nat === "receita" ? "entrada" : nat === "despesa" ? "saida" : null) : null;
-    await q(sb.from("regras_categoria").insert({ alvo: $("#regraAlvo").value, tipo: "regex", padrao, categoria_id: cat, prioridade: 2, origem: "usuario", sentido }));
+    await q(sb.from("regras_categoria").insert({ alvo: $("#regraAlvo").value, tipo: "regex", padrao, categoria_id: cat, prioridade: cat == null ? 0 : 2, origem: "usuario", sentido }));
+    estado.regrasNulas = null; cacheBusca = null; cacheSugestoes = null; cacheMetas = null;
     const r = await fn("/recategorizar");
-    avisar(`Regra criada · ${pl(r.gastos_alterados, "lançamento", "lançamentos")} e ${pl(r.itens_alterados, "item", "itens")} atualizados`);
+    avisar(cat == null
+      ? `Regra criada: “${texto}” fica sem categoria · ${pl(r.gastos_alterados, "lançamento voltou", "lançamentos voltaram")} para classificar (os que você classificou à mão não mudam)`
+      : `Regra criada · ${pl(r.gastos_alterados, "lançamento", "lançamentos")} e ${pl(r.itens_alterados, "item", "itens")} atualizados`);
     recarregar();
   } catch (e) { avisar(e.message, true); }
 };
@@ -2051,7 +2094,12 @@ acoes.reaplicarRegras = async (el) => {
   el.disabled = false;
 };
 acoes.apagarRegra = async (el) => {
-  try { await q(sb.from("regras_categoria").delete().eq("id", Number(el.dataset.id))); el.closest("li").remove(); avisar("Regra apagada"); }
+  try {
+    await q(sb.from("regras_categoria").delete().eq("id", Number(el.dataset.id)));
+    estado.regrasLista = (estado.regrasLista ?? []).filter((r) => r.id !== Number(el.dataset.id));
+    estado.regrasNulas = null;
+    el.closest("li").remove(); avisar("Regra apagada (use “Reaplicar regras a tudo” para refazer as categorias)");
+  }
   catch (e) { avisar(e.message, true); }
 };
 acoes.editarCategoria = (el) => {

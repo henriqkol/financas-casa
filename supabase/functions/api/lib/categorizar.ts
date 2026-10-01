@@ -6,7 +6,7 @@ export interface Regra {
   alvo: "item" | "transacao";
   tipo: "regex" | "exato";
   padrao: string;
-  categoria_id: number;
+  categoria_id: number | null;   // null = regra "sem categoria": deixa o lançamento para classificar à mão
   prioridade: number;
   sentido?: "saida" | "entrada" | null;
 }
@@ -16,7 +16,7 @@ export interface RegraCompilada extends Regra {
 }
 
 export interface Resultado {
-  categoria_id: number;
+  categoria_id: number | null;
   regra_id: number | null;
   origem: string;
 }
@@ -31,7 +31,8 @@ export function compilarRegras(regras: Regra[]): RegraCompilada[] {
       return { ...r, re };
     })
     .filter((r) => r.tipo === "exato" || r.re)
-    .sort((a, b) => a.prioridade - b.prioridade || a.id - b.id);
+    // Regras "sem categoria" vêm antes de todas: o usuário pediu explicitamente para não classificar
+    .sort((a, b) => Number(a.categoria_id != null) - Number(b.categoria_id != null) || a.prioridade - b.prioridade || a.id - b.id);
 }
 
 /** Aplica as regras de um alvo ao texto; a de menor prioridade que casar vence. */
@@ -66,6 +67,13 @@ export interface TxParaCategorizar {
  *  O dinheiro que vai para elas conta como gasto daquela categoria, não como transferência entre contas. */
 export interface CarteiraDespesa { ispb: string; nome: string; categoria: string }
 
+/** O lançamento casa com uma regra "sem categoria" (classificar um a um, sem aprender)? */
+export function regraSemCategoria(tx: { descricao: string; recebedor_nome?: string | null; sentido: "saida" | "entrada" }, regras: RegraCompilada[]): Resultado | null {
+  const nulas = regras.filter((r) => r.categoria_id == null);
+  if (!nulas.length) return null;
+  return aplicarRegras([tx.descricao, tx.recebedor_nome].filter(Boolean).join(" "), nulas, "transacao", tx.sentido);
+}
+
 /** Categoria de um lançamento a partir das regras e de alguns sinais fixos. */
 export function categorizarTransacao(
   tx: TxParaCategorizar,
@@ -73,6 +81,9 @@ export function categorizarTransacao(
   cat: Record<string, number>,
   carteiras: CarteiraDespesa[] = [],
 ): Resultado | null {
+  // Regra "sem categoria" vence tudo (inclusive os sinais do banco)
+  const vazio = regraSemCategoria(tx, regras);
+  if (vazio) return vazio;
   const op = (tx.tipo_operacao ?? "").toUpperCase();
   const fixo = (nome: string): Resultado | null => cat[nome] ? { categoria_id: cat[nome], regra_id: null, origem: "padrao" } : null;
   const carteira = tx.sentido === "saida" && tx.recebedor_ispb ? carteiras.find((c) => c.ispb === tx.recebedor_ispb) : undefined;

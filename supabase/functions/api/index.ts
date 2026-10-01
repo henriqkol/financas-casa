@@ -25,7 +25,7 @@ import { chaveAprendizado, dataBrasilia, decodificarEntidades, normalizar } from
 import { enviarPush, gerarChavesVapid, type AssinaturaPush, type ChavesVapid } from "./lib/webpush.ts";
 import { decodificarHtml, extrairDoPortal, infoDaChave, lerQr, urlsDeConsulta } from "./lib/nfce.ts";
 import {
-  aplicarRegras, categoriaDominante, categorizarTransacao, compilarRegras,
+  aplicarRegras, categoriaDominante, categorizarTransacao, compilarRegras, regraSemCategoria,
   type CarteiraDespesa, type RegraCompilada,
 } from "./lib/categorizar.ts";
 import { candidatos, escolhaAutomatica, JANELA, type TxCandidata } from "./lib/vinculo.ts";
@@ -278,12 +278,13 @@ async function categorizarItens(
 ): Promise<{ categoria_id: number | null; categoria_origem: string | null }[]> {
   const rg = await regras();
   const cats = await categorias();
+  // vazio = casou com regra "sem categoria": fica sem categoria de propósito (nem IA, nem loja, nem "Outros")
   const res = itens.map((i) => {
     const r = aplicarRegras(i.descricao, rg, "item");
-    return r ? { categoria_id: r.categoria_id, categoria_origem: r.origem } : { categoria_id: null as number | null, categoria_origem: null as string | null };
+    return r ? { categoria_id: r.categoria_id, categoria_origem: r.origem, vazio: r.categoria_id == null } : { categoria_id: null as number | null, categoria_origem: null as string | null, vazio: false };
   });
 
-  const faltando = res.map((r, i) => (r.categoria_id ? -1 : i)).filter((i) => i >= 0);
+  const faltando = res.map((r, i) => (r.categoria_id || r.vazio ? -1 : i)).filter((i) => i >= 0);
   if (faltando.length) {
     const cfg = await lerConfig(["anthropic_key"]);
     if (cfg.anthropic_key) {
@@ -293,7 +294,7 @@ async function categorizarItens(
         faltando.forEach((idx, k) => {
           const nome = nomes[k];
           if (nome && cats.porNome[nome]) {
-            res[idx] = { categoria_id: cats.porNome[nome], categoria_origem: "ia" };
+            res[idx] = { categoria_id: cats.porNome[nome], categoria_origem: "ia", vazio: false };
             novasRegras.push({
               alvo: "item", tipo: "exato", padrao: normalizar(itens[idx].descricao),
               categoria_id: cats.porNome[nome], prioridade: 5, origem: "ia",
@@ -311,9 +312,9 @@ async function categorizarItens(
 
   // O que sobrou: usa o tipo de loja (ex.: supermercado → Mercado), senão "Outros".
   const pelaLoja = loja ? aplicarRegras(loja, rg, "transacao") : null;
-  const lojaServe = pelaLoja && cats.porId[pelaLoja.categoria_id]?.conta_como_gasto;
-  return res.map((r) =>
-    r.categoria_id ? r
+  const lojaServe = pelaLoja && pelaLoja.categoria_id != null && cats.porId[pelaLoja.categoria_id]?.conta_como_gasto;
+  return res.map(({ vazio, ...r }) =>
+    r.categoria_id || vazio ? r
       : lojaServe ? { categoria_id: pelaLoja!.categoria_id, categoria_origem: "loja" }
       : { categoria_id: cats.porNome["Outros"] ?? null, categoria_origem: "padrao" }
   );
@@ -1211,7 +1212,8 @@ async function rotear(rota: string, req: Request, corpo: any, quem: Quem): Promi
       const tx = ok(await db.from("transacoes").select("id, descricao, recebedor_nome, sentido").eq("id", corpo.transacao_id).single()) as any;
       ok(await db.from("transacoes").update({ categoria_id: corpo.categoria_id, categoria_origem: "manual" }).eq("id", tx.id));
       let outros = 0;
-      if (corpo.aprender) {
+      const umAUm = !!regraSemCategoria(tx, await regras());   // regra "sem categoria": classifica só este
+      if (corpo.aprender && !umAUm) {
         const chave = chaveAprendizado(textoTx(tx));
         ok(await db.from("regras_categoria").upsert({
           casa_id: casaAtual(), alvo: "transacao", tipo: "exato", padrao: chave, categoria_id: corpo.categoria_id, prioridade: 1, origem: "aprendida", sentido: tx.sentido,
@@ -1224,7 +1226,7 @@ async function rotear(rota: string, req: Request, corpo: any, quem: Quem): Promi
         }
         outros = alvo.length;
       }
-      return json({ ok: true, outros_atualizados: outros });
+      return json({ ok: true, outros_atualizados: outros, um_a_um: umAUm });
     }
 
     case "/categorizar-lote": {
@@ -1237,10 +1239,12 @@ async function rotear(rota: string, req: Request, corpo: any, quem: Quem): Promi
       }
       let outros = 0;
       if (cat && corpo.aprender) {
+        const rg = await regras();
         const txs: any[] = [];
         for (let i = 0; i < ids.length; i += 200) txs.push(...(ok(await db.from("transacoes").select("id, descricao, recebedor_nome, sentido").in("id", ids.slice(i, i + 200))) as any[]));
         const chaves = new Map<string, string>();
-        for (const t of txs) { const k = chaveAprendizado(textoTx(t)); if (k) chaves.set(`${t.sentido}|${k}`, t.sentido); }
+        // quem tem regra "sem categoria" não vira regra aprendida nem contagia os parecidos
+        for (const t of txs) { if (regraSemCategoria(t, rg)) continue; const k = chaveAprendizado(textoTx(t)); if (k) chaves.set(`${t.sentido}|${k}`, t.sentido); }
         if (chaves.size) {
           ok(await db.from("regras_categoria").upsert([...chaves.entries()].map(([k, sentido]) => ({
             casa_id: casaAtual(), alvo: "transacao", tipo: "exato", padrao: k.slice(k.indexOf("|") + 1), categoria_id: cat, prioridade: 1, origem: "aprendida", sentido,
