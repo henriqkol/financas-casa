@@ -230,19 +230,35 @@ async function clienteRobo(casa: number): Promise<SupabaseClient> {
 
 const dormir = (ms: number) => new Promise((ok) => setTimeout(ok, ms));
 
+// Sessão do robô reaproveitada enquanto vale (pedidos simultâneos usam o mesmo login)
+const robos = new Map<number, Promise<{ cli: SupabaseClient; ate: number }>>();
+async function obterRobo(casa: number): Promise<SupabaseClient> {
+  const atual = robos.get(casa);
+  if (atual) {
+    try { const r = await atual; if (r.ate > Date.now() + 120000) return r.cli; } catch { /* refaz abaixo */ }
+  }
+  const novo = (async () => {
+    const cli = await clienteRobo(casa);
+    const sessao = (await cli.auth.getSession()).data.session;
+    // Login recém-feito: o relógio do banco pode estar alguns instantes atrás do servidor de login
+    await dormir(1500);
+    return { cli, ate: (sessao?.expires_at ?? 0) * 1000 };
+  })();
+  robos.set(casa, novo);
+  try { return (await novo).cli; } catch (e) { robos.delete(casa); throw e; }
+}
+
 async function naCasaDoRobo<T>(casa: number, fn: () => Promise<T>): Promise<T> {
-  const cli = await clienteRobo(casa);
-  // Login recém-feito: o relógio do banco pode estar alguns instantes atrás do servidor de login
-  // ("JWT issued at future"). Espera um pouco e tenta de novo uma vez.
-  await dormir(1200);
-  try {
+  for (let tentativa = 1; ; tentativa++) {
+    const cli = await obterRobo(casa);
     try { return await contexto.run({ db: cli, casa }, fn); }
     catch (e) {
-      if (!/issued at future/i.test(e instanceof Error ? e.message : String(e))) throw e;
-      await dormir(2500);
-      return await contexto.run({ db: cli, casa }, fn);
+      const msg = e instanceof Error ? e.message : String(e);
+      if (tentativa >= 3 || !/issued at future|JWT expired/i.test(msg)) throw e;
+      if (/JWT expired/i.test(msg)) robos.delete(casa);
+      await dormir(2000 * tentativa);
     }
-  } finally { await cli.auth.signOut({ scope: "local" }).catch(() => {}); }
+  }
 }
 
 /** Casas com Open Finance configurado (para a sincronização agendada). */
