@@ -422,8 +422,9 @@ async function telaInicio() {
   const max = cats[0]?.valor || 1;
   const semClassificacao = cats.filter((c) => c.id == null || c.nome === "Outros").reduce((s, c) => s + c.valor, 0);
   const nNotas = pend.filter((p) => p.tipo === "nota_sem_gasto").length;
-  const nSemCat = pend.filter((p) => p.tipo === "gasto_sem_categoria").length;
-  const nSemCatMes = linhas.filter((l) => l.categoria_id == null && l.data <= hoje).length;
+  const inicioCtrl = await inicioControle();
+  const nSemCat = await contarSemCategoria().catch(() => pend.filter((p) => p.tipo === "gasto_sem_categoria").length);
+  const nSemCatMes = linhas.filter((l) => l.categoria_id == null && l.data <= hoje).length;   // (mês na tela)
   const sync = ultimo[0];
   const salarioAnt = receitasAnt.filter((r) => r.categoria === "Salário").map((r) => Number(String(r.data).slice(8, 10)));
   const diaSalario = salarioAnt.length ? Math.min(...salarioAnt) : null;
@@ -455,7 +456,7 @@ async function telaInicio() {
     </div>
 
     ${nSemCat || nNotas ? `<div class="cartao a-fazer"><h3>A fazer</h3>
-      ${nSemCat ? `<button class="acao-linha" data-acao="abrirTriagem">${ICONE.etiqueta}<span class="corpo"><strong>Categorizar ${pl(nSemCat, "lançamento", "lançamentos")}</strong><small>${nSemCatMes ? `${nSemCatMes} em ${nomeM} · ` : ""}${nSemCat} no total, em todos os meses · iguais vêm agrupados</small></span><span class="seta">›</span></button>` : ""}
+      ${nSemCat ? `<button class="acao-linha" data-acao="abrirTriagem">${ICONE.etiqueta}<span class="corpo"><strong>Categorizar ${pl(nSemCat, "lançamento", "lançamentos")}</strong><small>${estado.mes >= inicioCtrl && nSemCatMes ? `${nSemCatMes} em ${nomeM} · ` : ""}desde ${nomeMesAno(inicioCtrl)}, quando vocês começaram a controlar · iguais vêm agrupados</small></span><span class="seta">›</span></button>` : ""}
       ${nNotas ? `<button class="acao-linha" data-acao="verNotasPendentes">${ICONE.nota}<span class="corpo"><strong>Confirmar ${pl(nNotas, "nota fiscal", "notas fiscais")}</strong><small>sem gasto ligado${total > 0 ? ` · ${Math.round((comNota / total) * 100)}% dos gastos de ${nomeM} têm nota` : ""}</small></span><span class="seta">›</span></button>` : ""}
     </div>` : ""}
 
@@ -736,6 +737,7 @@ function tituloTx(t) {
 const ehPagamentoDivida = (t) => t.sentido === "saida" && estado.catPorId[t.categoria_id]?.nome === "Pagamento de dívida";
 
 async function telaGastos() {
+  inicioControle().catch(() => {});
   const f = estado.filtroGastos;
   const catF = estado.categoriaFiltro;
   const nomeCat = catF === "nula" ? "Sem categoria" : estado.catPorId[catF]?.nome;
@@ -858,7 +860,9 @@ async function carregarMovimentacoes() {
   if (f === "sem-nota") txs = txs.filter((t) => tipoLancamento(t) === "despesa" && !t.nota_transacao.length);
   if (f === "sem-categoria") txs = txs.filter((t) => t.categoria_id == null);
 
-  const botaoTriagem = f === "sem-categoria" ? `<div class="cartao cartao-triagem"><div class="linha" style="border-top:0;padding:0;cursor:default"><div class="corpo">
+  const antesDoControle = !buscando && estado.inicioControle && estado.mes < estado.inicioControle;
+  const botaoTriagem = f === "sem-categoria" && antesDoControle ? `<div class="cartao cartao-compacto"><p class="nota-texto" style="margin:0">${nomeMes(estado.mes)} é anterior a ${nomeMesAno(estado.inicioControle)}, quando vocês começaram a controlar: estes lançamentos não entram na lista do que falta categorizar. <a href="#" data-acao="abrirPreferencias">Mudar o mês de início</a></p></div>`
+    : f === "sem-categoria" ? `<div class="cartao cartao-triagem"><div class="linha" style="border-top:0;padding:0;cursor:default"><div class="corpo">
       <div class="titulo">Categorizar em sequência</div><div class="meta">Lançamentos iguais agrupados, um grupo por vez, com as categorias mais prováveis.</div></div>
       <button class="botao peq" data-acao="abrirTriagem">Começar</button></div></div>` : "";
   if (!txs.length) {
@@ -1103,6 +1107,29 @@ async function salvarApelido(chave, apelido) {
   estado.apelidos = mapa;
 }
 
+// ------------------------------------------------------------------ INÍCIO DO CONTROLE
+// Lançamentos sem categoria só contam a partir do mês em que a casa começou a controlar
+// (preferência controle_inicio, "AAAA-MM"; sem ela, o mês em que a casa foi criada).
+async function inicioControle() {
+  if (estado.inicioControle) return estado.inicioControle;
+  let mes = null;
+  try { mes = (await q(sb.from("preferencias").select("valor").eq("chave", "controle_inicio").maybeSingle()))?.valor ?? null; } catch { /* sem preferência */ }
+  if (!/^\d{4}-\d{2}$/.test(mes ?? "")) {
+    try { mes = String((await q(sb.from("casas").select("criado_em").eq("id", estado.casa?.casa_id).maybeSingle()))?.criado_em ?? "").slice(0, 7) || null; } catch { /* offline */ }
+  }
+  estado.inicioControle = /^\d{4}-\d{2}$/.test(mes ?? "") ? mes : mesAtual();
+  return estado.inicioControle;
+}
+const nomeMesAno = (m) => { const [a, mm] = m.split("-"); return `${nomeMes(m).split(" ")[0]}/${a}`; };
+/** Quantos lançamentos sem categoria desde o início do controle (até hoje). */
+async function contarSemCategoria() {
+  const ini = await inicioControle();
+  const { count, error } = await sb.from("transacoes").select("id", { count: "exact", head: true })
+    .eq("removida", false).is("categoria_id", null).gte("data", `${ini}-01`).lte("data", hojeISO());
+  if (error) throw new Error(error.message);
+  return count ?? 0;
+}
+
 // ------------------------------------------------------------------ TRIAGEM (categorizar em sequência)
 // Lançamentos sem categoria agrupados pela descrição (a mesma chave que o servidor usa para aprender),
 // um grupo por vez, com as categorias mais prováveis como botões.
@@ -1114,8 +1141,9 @@ acoes.abrirTriagem = async () => {
   abrirFolha(`<h2>Categorizar em sequência</h2>${carregando()}`);
   try {
     const campos = "id, data, descricao, recebedor_nome, valor, sentido, categoria_id, contas(apelido, nome)";
+    const ini = await inicioControle();
     const [semCat, comCat] = await Promise.all([
-      todas(() => sb.from("transacoes").select(campos).eq("removida", false).is("categoria_id", null).order("data", { ascending: false }).order("id")),
+      todas(() => sb.from("transacoes").select(campos).eq("removida", false).is("categoria_id", null).gte("data", `${ini}-01`).lte("data", hojeISO()).order("data", { ascending: false }).order("id")),
       todas(() => sb.from("transacoes").select("descricao, recebedor_nome, sentido, categoria_id").eq("removida", false).not("categoria_id", "is", null)
         .gte("data", somarMes(mesAtual(), -12) + "-01")),
     ]);
@@ -1169,7 +1197,7 @@ function mostrarGrupoTriagem() {
   const g = tr.grupos[tr.i];
   if (!g) {
     abrirFolha(`<h2>Pronto!</h2><div class="vazio"><strong>${tr.feitos ? `${pl(tr.lancamentos, "lançamento categorizado", "lançamentos categorizados")}` : "Nada para categorizar"}</strong>
-      ${tr.grupos.length ? "Você passou por todos os grupos." : "Não há lançamentos sem categoria."}</div>
+      ${tr.grupos.length ? "Você passou por todos os grupos." : `Não há lançamentos sem categoria desde ${nomeMesAno(estado.inicioControle ?? mesAtual())}.`}</div>
       <div class="botoes"><button class="botao cheio" data-acao="fecharFolha">Fechar</button></div>`);
     return;
   }
@@ -1177,7 +1205,7 @@ function mostrarGrupoTriagem() {
   const { lista, comBase } = sugestoesTriagem(g);
   const n = g.txs.length;
   abrirFolha(`
-    <div class="nota-texto" style="padding-right:48px">Grupo ${tr.i + 1} de ${tr.grupos.length} · ${pl(tr.total - tr.lancamentos, "lançamento sem categoria", "lançamentos sem categoria")}</div>
+    <div class="nota-texto" style="padding-right:48px">Grupo ${tr.i + 1} de ${tr.grupos.length} · ${pl(tr.total - tr.lancamentos, "lançamento sem categoria", "lançamentos sem categoria")} desde ${nomeMesAno(estado.inicioControle ?? mesAtual())} · <a href="#" data-acao="abrirPreferencias">mudar</a></div>
     <div class="plano-trilho" style="margin:6px 0 14px"><i style="width:${(tr.i / Math.max(tr.grupos.length, 1)) * 100}%;background:var(--acento)"></i></div>
     <h2>${esc(tituloTx(t0))}${n > 1 ? ` <span class="chip">×${n}</span>` : ""}</h2>
     <div class="nota-texto">${esc(t0.descricao)}</div>
@@ -2909,6 +2937,8 @@ acoes.abrirPreferencias = async () => {
       <label class="campo" style="flex:1"><span>Reserva de emergência (meses)</span><input type="text" inputmode="numeric" id="prReserva" value="${esc(prefs.reserva_meses ?? "6")}"></label>
     </div>
     <p class="nota-texto">A regra 50/30/20 separa a renda em 50% essencial, 30% estilo de vida e 20% para guardar ou quitar dívidas. Mudar a meta de guardar ajusta o estilo de vida.</p>
+    <label class="campo"><span>Começamos a controlar em (mês)</span><input type="month" id="prInicio" value="${esc(await inicioControle())}" max="${mesAtual()}"></label>
+    <p class="nota-texto" style="margin-top:-6px">Lançamentos sem categoria de antes deste mês não aparecem no “A fazer” nem na triagem (continuam no extrato e nos totais).</p>
     <div class="botoes"><button class="botao cheio" data-acao="salvarPreferencias">Salvar</button></div>`);
 };
 acoes.salvarPreferencias = async (el) => {
@@ -2921,7 +2951,9 @@ acoes.salvarPreferencias = async (el) => {
       { chave: "renda_mensal", valor: renda ? String(renda) : null },
       { chave: "meta_poupanca_pct", valor: String(poup) },
       { chave: "reserva_meses", valor: String(reserva) },
+      ...(/^\d{4}-\d{2}$/.test($("#prInicio")?.value ?? "") ? [{ chave: "controle_inicio", valor: $("#prInicio").value }] : []),
     ]));
+    if (/^\d{4}-\d{2}$/.test($("#prInicio")?.value ?? "")) estado.inicioControle = $("#prInicio").value;
     estado.prefs = { reserva_meses: reserva };
     cacheSugestoes = null;
     avisar("Plano atualizado");

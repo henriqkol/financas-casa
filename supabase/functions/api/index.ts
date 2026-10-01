@@ -833,6 +833,22 @@ async function cdiAnual(): Promise<number> {
   return Number(c.cdi_anual ?? 14.9);
 }
 
+/** Mês em que a casa começou a controlar (preferência controle_inicio; sem ela, o mês de criação da casa). */
+async function inicioControle(): Promise<string> {
+  const p = await lerPreferencia("controle_inicio");
+  if (p && /^\d{4}-\d{2}$/.test(p)) return p;
+  const c = ok(await adm.from("casas").select("criado_em").eq("id", casaAtual()).maybeSingle()) as any;
+  return String(c?.criado_em ?? hojeBrasilia()).slice(0, 7);
+}
+/** Lançamentos sem categoria desde o início do controle (antes disso o usuário não quer categorizar). */
+async function contarSemCategoriaDesdeInicio(): Promise<number> {
+  const ini = await inicioControle();
+  const { count, error } = await db.from("transacoes").select("id", { count: "exact", head: true })
+    .eq("removida", false).is("categoria_id", null).gte("data", `${ini}-01`).lte("data", hojeBrasilia());
+  if (error) throw new HttpErro(500, error.message);
+  return count ?? 0;
+}
+
 async function montarSugestoes() {
   const hoje = hojeBrasilia();
   const ref = mesesAnteriores(hoje, 3);
@@ -944,7 +960,7 @@ async function montarSugestoes() {
     cdi_anual: await cdiAnual(),
     pendencias: {
       notas: (pend as any[]).filter((x) => x.tipo === "nota_sem_gasto").length,
-      sem_categoria: (pend as any[]).filter((x) => x.tipo === "gasto_sem_categoria").length,
+      sem_categoria: await contarSemCategoriaDesdeInicio(),
     },
     ufs_notas: [...new Set((notasUf as any[]).map((n) => n.uf))],
   };
