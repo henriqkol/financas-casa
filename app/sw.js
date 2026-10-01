@@ -25,3 +25,23 @@ self.addEventListener("fetch", (e) => {
       .catch(() => caches.match(e.request).then((r) => r || caches.match("index.html")))
   );
 });
+
+// Notificações de lançamentos novos (enviadas pelo servidor depois de cada sincronização)
+self.addEventListener("push", (e) => {
+  let d = {};
+  try { d = e.data ? e.data.json() : {}; } catch { d = { titulo: e.data ? e.data.text() : "" }; }
+  e.waitUntil(self.registration.showNotification(d.titulo || "Finanças da Casa", {
+    body: d.corpo || "", tag: d.tag, icon: "icons/icon-192.png", badge: "icons/icon-192.png",
+    data: { url: d.url || "./" },
+  }));
+});
+self.addEventListener("notificationclick", (e) => {
+  e.notification.close();
+  const url = new URL((e.notification.data && e.notification.data.url) || "./", self.registration.scope).href;
+  e.waitUntil(self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((janelas) => {
+    for (const j of janelas) {
+      if ("focus" in j) { if (j.navigate) j.navigate(url).catch(() => {}); return j.focus(); }
+    }
+    return self.clients.openWindow(url);
+  }));
+});

@@ -1692,6 +1692,109 @@ acoes.instalarApp = async () => {
   atualizarCartaoInstalar();
 };
 
+// ------------------------------------------------------------------ NOTIFICAÇÕES
+// Cada aparelho se inscreve (Web Push). O servidor avisa a cada lançamento novo depois da sincronização.
+const notifSuportada = () => "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+/** Service worker pronto (ou null se não ficar pronto em 4 s, ex.: primeira abertura). */
+function registroSW() { return Promise.race([navigator.serviceWorker.ready, new Promise((ok) => setTimeout(() => ok(null), 4000))]); }
+async function assinaturaPush() { const reg = await registroSW(); return reg ? reg.pushManager.getSubscription() : null; }
+function bytesDeB64u(s) { const p = "=".repeat((4 - (s.length % 4)) % 4); return Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/") + p), (c) => c.charCodeAt(0)); }
+function prefsNotifDaTela() {
+  return { despesas: $("#ntDespesas")?.checked ?? true, receitas: $("#ntReceitas")?.checked ?? true, valores: $("#ntValores")?.checked ?? true };
+}
+async function montarCartaoNotificacoes() {
+  const el = $("#cartaoNotificacoes"), resumo = $("#resumoNotif");
+  if (!el) return;
+  const iOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  const instalado = matchMedia("(display-mode: standalone)").matches || navigator.standalone;
+  if (!notifSuportada()) {
+    resumo.textContent = "· indisponível";
+    el.innerHTML = `<p class="nota-texto">${iOS && !instalado ? "No iPhone, as notificações só funcionam com o app instalado na tela de início (Compartilhar → Adicionar à Tela de Início). Depois abra por lá e volte aqui." : "Este navegador não permite notificações de apps da web."}</p>`;
+    return;
+  }
+  if (Notification.permission === "denied") {
+    resumo.textContent = "· bloqueadas";
+    el.innerHTML = `<p class="nota-texto">As notificações estão bloqueadas para este site nas configurações do navegador. Para ligar: toque no cadeado ao lado do endereço (ou em Configurações do site) → Notificações → Permitir, e volte aqui.</p>`;
+    return;
+  }
+  let estadoServ = { inscrito: false, prefs: null };
+  const sub = await assinaturaPush().catch(() => null);
+  if (sub && navigator.onLine) estadoServ = await fn("/notificacoes", { acao: "estado", endpoint: sub.endpoint }).catch(() => estadoServ);
+  const ligado = !!sub && estadoServ.inscrito && Notification.permission === "granted";
+  const p = estadoServ.prefs ?? { despesas: true, receitas: true, valores: true };
+  resumo.textContent = ligado ? "· ligadas neste aparelho" : "· desligadas";
+  el.innerHTML = `
+    <label class="interruptor"><span><strong>Avisar lançamentos novos</strong><br><span class="nota-texto">Uma notificação para cada despesa ou receita que chegar do banco${ligado ? "" : ". Desligado: o app não notifica neste aparelho."}</span></span>
+      <input type="checkbox" role="switch" data-muda="alternarNotificacoes" ${ligado ? "checked" : ""}><i aria-hidden="true"></i></label>
+    <div id="opcoesNotif" ${ligado ? "" : "hidden"} style="margin-top:12px">
+      <label class="check"><input type="checkbox" id="ntDespesas" data-muda="prefsNotificacoes" ${p.despesas !== false ? "checked" : ""}> Despesas</label>
+      <label class="check"><input type="checkbox" id="ntReceitas" data-muda="prefsNotificacoes" ${p.receitas !== false ? "checked" : ""}> Receitas</label>
+      <label class="check"><input type="checkbox" id="ntValores" data-muda="prefsNotificacoes" ${p.valores !== false ? "checked" : ""}> Mostrar o valor na notificação (desmarque para aparecer só “Nova despesa”)</label>
+      <div class="botoes" style="margin-top:4px"><button class="botao peq sec" data-acao="testarNotificacao">Enviar notificação de teste</button></div>
+    </div>
+    <p class="nota-texto">Vale só para este aparelho: cada pessoa liga no próprio celular. Transferências entre contas, faturas e investimentos não geram aviso. O app procura dados novos na Pluggy a cada 30 minutos.</p>`;
+}
+mudancas.alternarNotificacoes = async (el) => {
+  el.disabled = true;
+  try {
+    if (el.checked) {
+      const perm = await Notification.requestPermission();
+      if (perm !== "granted") throw new Error("Sem permissão para notificar. Permita as notificações quando o navegador perguntar.");
+      const { publica } = await fn("/notificacoes", { acao: "chave" });
+      const reg = await registroSW();
+      if (!reg) throw new Error("O app ainda está terminando de se instalar neste aparelho. Recarregue a página e tente de novo.");
+      let sub = await reg.pushManager.getSubscription();
+      if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: bytesDeB64u(publica) });
+      await fn("/notificacoes", { acao: "assinar", subscription: sub.toJSON(), ...prefsNotifDaTela() });
+      avisar("Notificações ligadas neste aparelho");
+    } else {
+      const sub = await assinaturaPush();
+      if (sub) { await fn("/notificacoes", { acao: "cancelar", endpoint: sub.endpoint }).catch(() => {}); await sub.unsubscribe().catch(() => {}); }
+      avisar("Notificações desligadas neste aparelho");
+    }
+  } catch (e) {
+    avisar(/permission|denied|not allowed/i.test(e.message) ? "O navegador não deixou ligar as notificações. Confira a permissão de notificações deste site nas configurações do navegador." : e.message, true);
+  }
+  el.disabled = false;
+  montarCartaoNotificacoes();
+};
+mudancas.prefsNotificacoes = async () => {
+  try {
+    const sub = await assinaturaPush();
+    if (!sub) return;
+    await fn("/notificacoes", { acao: "assinar", subscription: sub.toJSON(), ...prefsNotifDaTela() });
+    avisar("Preferência salva");
+  } catch (e) { avisar(e.message, true); }
+};
+acoes.testarNotificacao = async (el) => {
+  el.disabled = true;
+  try {
+    const sub = await assinaturaPush();
+    if (!sub) throw new Error("Este aparelho não está inscrito");
+    await fn("/notificacoes", { acao: "testar", endpoint: sub.endpoint });
+    avisar("Notificação de teste enviada");
+  } catch (e) { avisar(e.message, true); montarCartaoNotificacoes(); }
+  el.disabled = false;
+};
+
+// ---------- Procura dados novos ao abrir o app (no máximo a cada 10 minutos por aparelho)
+async function verificarAoAbrir() {
+  if (!navigator.onLine || sessaoOffline || !estado.casa) return;
+  const chave = `ultimaVerificacao:${estado.casa.casa_id}`;
+  try {
+    if (Date.now() - Number(localStorage.getItem(chave) || 0) < 10 * 60000) return;
+    localStorage.setItem(chave, String(Date.now()));
+  } catch { /* sem armazenamento: verifica mesmo assim */ }
+  try {
+    const r = await fn("/verificar", {});
+    if (!r.sincronizou) return;
+    cacheBusca = null; cacheSugestoes = null; cacheMetas = null; estado.evo = null;
+    if (r.novas) avisar(`Chegaram ${pl(r.novas, "lançamento novo", "lançamentos novos")} do banco`);
+    if (folha.hidden && ["inicio", "gastos", "metas"].includes(estado.aba)) recarregarNoLugar();
+  } catch { /* tenta de novo na próxima abertura */ }
+}
+document.addEventListener("visibilitychange", () => { if (!document.hidden) verificarAoAbrir(); });
+
 // ------------------------------------------------------------------ CASA
 // Cada casa tem os próprios dados. A casa aberta fica guardada para abrir offline.
 const CHAVE_CASA = "casaAberta";
@@ -1719,6 +1822,8 @@ acoes.renomearCasa = async () => {
 };
 acoes.abrirCasa = async (el) => {
   try {
+    const sub = notifSuportada() ? await assinaturaPush().catch(() => null) : null;
+    if (sub) { await fn("/notificacoes", { acao: "cancelar", endpoint: sub.endpoint }).catch(() => {}); await sub.unsubscribe().catch(() => {}); }
     const r = await q(sb.rpc("trocar_casa", { p_casa: Number(el.dataset.id) }));
     guardarCasa(r);
     location.hash = "";
@@ -1755,6 +1860,7 @@ async function telaMais() {
   $("#conteudo").innerHTML = `
     ${cartaoInstalar()}
     <div id="cartaoBloqueio"></div>
+    <details class="secao" id="secaoNotificacoes"><summary>Notificações <span class="resumo-secao" id="resumoNotif"></span></summary><div class="conteudo" id="cartaoNotificacoes"><p class="nota-texto">Verificando…</p></div></details>
     <div class="atalhos">
       <button class="atalho" data-acao="irPatrimonio" data-s="investimentos"><span class="icone-bloco b3">${ICONE.banco}</span><span>Patrimônio</span></button>
       <button class="atalho" data-acao="irSugestoes"><span class="icone-bloco b1">${ICONE.ideia}</span><span>Sugestões</span></button>
@@ -1858,6 +1964,7 @@ async function telaMais() {
     <div class="cartao plano"><div class="linha" style="cursor:default"><div class="corpo"><div class="titulo">${esc(estado.email)}</div><div class="meta">Versão ${VERSAO}</div></div>
       <button class="botao peq sec" data-acao="sair">Sair</button></div></div>`;
   montarCartaoBloqueio();
+  montarCartaoNotificacoes();
   if (estado.abrirCategorias) { estado.abrirCategorias = false; $("#secaoCategorias")?.scrollIntoView({ block: "start" }); }
   if (estado.abrirOpenFinance) { estado.abrirOpenFinance = false; $("#secaoOpenFinance")?.scrollIntoView({ block: "start" }); }
 }
@@ -2958,5 +3065,6 @@ async function iniciar() {
   const inicial = location.hash.replace("#", "");
   await irPara(["inicio", "gastos", "escanear", "notas", "mais", "patrimonio", "sugestoes", "metas"].includes(inicial) ? inicial : "inicio");
   processarFila();
+  verificarAoAbrir();
 }
 iniciar();

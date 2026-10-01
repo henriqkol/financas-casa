@@ -68,3 +68,7 @@ Ver `docs/BASE.md` para as visões e consultas prontas.
 - Sugestões: `economia_mensal` + `no_total` = entra no "economia possível" (lista em `economia_composicao`); déficit e "acima do ideal" usam `impacto_mensal` (laranja, não somam).
 - `todos()`/`todas()` sempre ordenam ao paginar (sem ORDER BY as páginas podem repetir/pular linhas).
 - Robô: sessão reaproveitada por casa (pedidos simultâneos) e nova tentativa em "JWT issued at future".
+
+## Verificação e notificações (v1.14, 01/10/2026)
+- `POST /verificar`: pergunta à Pluggy o `lastUpdatedAt` de cada conexão e só sincroniza se mudou desde o último marcador (`casa_config` `pluggy_visto:<item>`, gravado a cada sincronização). pg_cron `verificar-pluggy` a cada 30 min (todas as casas, pelo robô); o app chama ao abrir/voltar ao primeiro plano (no máximo a cada 10 min por aparelho). Não roda se houver sincronização começada há < 5 min sem fim.
+- Notificações: Web Push próprio (`lib/webpush.ts`, aes128gcm + VAPID, sem dependências). Chaves VAPID em `app_config` (`vapid_publica`, `vapid_privada`). Inscrições por aparelho em `casa_config` `push:<sha256(endpoint)>` = `{sub, prefs: {despesas, receitas, valores, email}}`. Depois de cada sincronização, um aviso por lançamento novo (despesa/receita, de conta que já existia, data nos últimos 7 dias; máx. 8 + resumo). 404/410 apaga a inscrição. Mais → Notificações liga/desliga por aparelho.

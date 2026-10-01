@@ -13,13 +13,16 @@
 //   POST /categorizar-lote       {transacao_ids, categoria_id, aprender}  → triagem de vários parecidos
 //   POST /recategorizar   {}          → reaplica as regras (após mudar regras)
 //   POST /sync            {}          → busca contas e lançamentos no Open Finance
+//   POST /verificar       {}          → pergunta à Pluggy se há dados novos e só então sincroniza (agendado a cada 30 min e ao abrir o app)
+//   POST /notificacoes    {acao: "chave"|"assinar"|"cancelar"|"estado"|"testar", ...} → notificações de lançamentos novos
 //   GET  /config  · POST /config {pluggy_client_id, pluggy_client_secret, anthropic_key}
 //   POST /itens   {id, acao: "adicionar"|"remover"} · POST /descobrir-itens
 //   POST /pagar-divida {divida_id, transacao_id? | data+valor, aprender} · POST /sync-pagamentos
 
 import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { chaveAprendizado, dataBrasilia, normalizar } from "./lib/texto.ts";
+import { chaveAprendizado, dataBrasilia, decodificarEntidades, normalizar } from "./lib/texto.ts";
+import { enviarPush, gerarChavesVapid, type AssinaturaPush, type ChavesVapid } from "./lib/webpush.ts";
 import { decodificarHtml, extrairDoPortal, infoDaChave, lerQr, urlsDeConsulta } from "./lib/nfce.ts";
 import {
   aplicarRegras, categoriaDominante, categorizarTransacao, compilarRegras,
@@ -140,7 +143,7 @@ async function categorias(): Promise<CacheCategorias> {
   const casa = casaAtual();
   let c = cacheCategorias.get(casa);
   if (!c) {
-    const lista = ok(await db.from("categorias").select("id, nome, conta_como_gasto, ativa")) as any[];
+    const lista = ok(await db.from("categorias").select("id, nome, conta_como_gasto, ativa, natureza")) as any[];
     c = {
       porNome: Object.fromEntries(lista.map((c) => [c.nome, c.id])),
       porId: Object.fromEntries(lista.map((c) => [c.id, c])),
@@ -180,7 +183,7 @@ async function autorizar(req: Request, rota: string): Promise<Quem> {
   const segredo = req.headers.get("x-cron-secret");
   if (segredo) {
     const c = await lerConfigGlobal(["cron_secret"]);
-    if (c.cron_secret && segredo === c.cron_secret && ["/sync", "/recategorizar", "/sugestoes", "/metas"].includes(rota)) return { email: null, cron: true };
+    if (c.cron_secret && segredo === c.cron_secret && ["/sync", "/verificar", "/recategorizar", "/sugestoes", "/metas"].includes(rota)) return { email: null, cron: true };
     throw new HttpErro(401, "Segredo inválido");
   }
   const token = (req.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "");
@@ -549,11 +552,120 @@ async function vincularPendentes(): Promise<number> {
   return n;
 }
 
+// ------------------------------------------------------------------ Notificações (Web Push)
+type NovaTx = { id: string; data: string; descricao: string; valor: number; sentido: string; categoria_id: number | null; conta: string };
+type PrefsPush = { despesas: boolean; receitas: boolean; valores: boolean; email: string | null };
+const CONTATO_PUSH = "https://henriqkol.github.io/financas-casa/";
+
+/** Chaves VAPID do app (geradas na primeira vez e guardadas na configuração global). */
+async function chavesVapid(): Promise<ChavesVapid> {
+  const c = await lerConfigGlobal(["vapid_publica", "vapid_privada"]);
+  if (c.vapid_publica && c.vapid_privada) return { publica: c.vapid_publica, privadaJwk: JSON.parse(c.vapid_privada) };
+  const novas = await gerarChavesVapid();
+  await gravarConfigGlobal("vapid_privada", JSON.stringify(novas.privadaJwk));
+  await gravarConfigGlobal("vapid_publica", novas.publica);
+  return novas;
+}
+async function chaveAssinatura(endpoint: string): Promise<string> {
+  const h = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(endpoint)));
+  return "push:" + [...h.slice(0, 12)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+/** Aparelhos que pediram aviso nesta casa (guardados em casa_config, só o servidor lê). */
+async function assinaturasDaCasa(casa: number): Promise<{ chave: string; sub: AssinaturaPush; prefs: PrefsPush }[]> {
+  const linhas = ok(await adm.from("casa_config").select("chave, valor").eq("casa_id", casa).like("chave", "push:%")) as any[];
+  return linhas.map((l) => { try { const v = JSON.parse(l.valor); return { chave: l.chave, sub: v.sub, prefs: v.prefs }; } catch { return null; } })
+    .filter((x): x is { chave: string; sub: AssinaturaPush; prefs: PrefsPush } => !!x?.sub?.endpoint);
+}
+const brl = (v: number) => "R$ " + v.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+/** "Compra no débito|COMERCIAL ZAFFARI LTDA" → "Comercial Zaffari" (ou o apelido que a casa deu). */
+function nomeParaAviso(descricao: string, apelidos: Record<string, string>): string {
+  const i = descricao.indexOf("|");
+  let n = decodificarEntidades(i > 0 ? descricao.slice(i + 1) : descricao).trim();
+  const ap = apelidos[chaveAprendizado(n)];
+  if (ap) return ap;
+  n = n.replace(/\s*(PARC(ELA)?\.?\s*)?\d{1,2}\s*\/\s*\d{1,2}\s*$/i, "").replace(/[\s.,*-]+(LTDA|S\.?\s?\/?A|ME|EPP|EIRELI)\.?$/i, "").trim() || n;
+  if (!/[a-zà-ÿ]/.test(n)) n = n.toLowerCase().replace(/(^|\s)(\S)/g, (_m, e, c) => e + c.toUpperCase());
+  return n.slice(0, 60);
+}
+
+/** Um aviso por lançamento novo (despesa ou receita) para cada aparelho inscrito na casa. */
+async function notificarNovas(novas: NovaTx[]): Promise<number> {
+  if (!novas.length) return 0;
+  const casa = casaAtual();
+  const assinaturas = await assinaturasDaCasa(casa);
+  if (!assinaturas.length) return 0;
+  const cats = await categorias();
+  const apelidosTxt = await lerPreferencia("apelidos");
+  let apelidos: Record<string, string> = {};
+  try { apelidos = apelidosTxt ? JSON.parse(apelidosTxt) : {}; } catch { /* sem apelidos */ }
+  // Só consumo e renda: transferências entre contas, faturas e investimentos não viram aviso
+  const tipoDe = (t: NovaTx) => {
+    const nat = t.categoria_id != null ? cats.porId[t.categoria_id]?.natureza : null;
+    if (nat === "neutro") return null;
+    if (t.sentido === "entrada") return nat === "despesa" ? null : "receita";
+    return nat === "receita" ? null : "despesa";
+  };
+  const lista = novas.map((t) => ({ t, tipo: tipoDe(t) })).filter((x) => x.tipo).sort((a, b) => b.t.data.localeCompare(a.t.data));
+  if (!lista.length) return 0;
+  const chaves = await chavesVapid();
+  const MAX = 8;
+  let enviados = 0;
+  for (const a of assinaturas) {
+    const minhas = lista.filter((x) => (x.tipo === "despesa" ? a.prefs?.despesas !== false : a.prefs?.receitas !== false));
+    if (!minhas.length) continue;
+    const mensagens = minhas.slice(0, MAX).map(({ t, tipo }) => {
+      const nome = nomeParaAviso(t.descricao, apelidos);
+      const cat = t.categoria_id != null ? cats.porId[t.categoria_id]?.nome : "sem categoria";
+      const valor = `${tipo === "receita" ? "+" : "−"}${brl(t.valor)}`;
+      return {
+        titulo: a.prefs?.valores === false ? `${tipo === "receita" ? "Nova receita" : "Nova despesa"} · ${nome}` : `${valor} · ${nome}`,
+        corpo: [t.conta, cat].filter(Boolean).join(" · "),
+        tag: `tx-${t.id}`, url: "./#gastos",
+      };
+    });
+    if (minhas.length > MAX) mensagens.push({ titulo: `Mais ${minhas.length - MAX} lançamentos novos`, corpo: "Abra o extrato para ver todos", tag: `resumo-${Date.now()}`, url: "./#gastos" });
+    for (const m of mensagens) {
+      try {
+        const st = await enviarPush(a.sub, m, chaves, CONTATO_PUSH);
+        if (st === 404 || st === 410) { await adm.from("casa_config").delete().eq("casa_id", casa).eq("chave", a.chave); break; }
+        if (st >= 200 && st < 300) enviados++;
+      } catch (e) { console.warn("push:", e); }
+    }
+  }
+  return enviados;
+}
+
+// ------------------------------------------------------------------ Verificação rápida (há dados novos na Pluggy?)
+/** Pergunta à Pluggy quando cada conexão foi atualizada; sincroniza só se mudou desde a última vez. */
+async function verificarAtualizacoes(origem: string) {
+  const cfg = await lerConfig(["pluggy_client_id", "pluggy_client_secret"]);
+  if (!cfg.pluggy_client_id || !cfg.pluggy_client_secret) return { configurado: false, sincronizou: false };
+  // Já tem uma sincronização rodando (começou há menos de 5 min e não terminou): não começa outra
+  const emCurso = ok(await db.from("sync_log").select("id").is("fim", null).gte("inicio", new Date(Date.now() - 5 * 60000).toISOString()).limit(1)) as any[];
+  if (emCurso.length) return { configurado: true, sincronizou: false, motivo: "sincronização em andamento" };
+  const itens = ok(await db.from("pluggy_itens").select("id")) as any[];
+  if (!itens.length) return { configurado: true, sincronizou: false };
+  const apiKey = await autenticar(cfg.pluggy_client_id, cfg.pluggy_client_secret);
+  const vistos = await lerConfig(itens.map((i) => `pluggy_visto:${i.id}`));
+  const mudaram: string[] = [];
+  for (const it of itens) {
+    try {
+      const item = await obterItem(apiKey, it.id);
+      const marcador = item.lastUpdatedAt ?? item.updatedAt ?? null;
+      if (marcador && String(marcador) !== vistos[`pluggy_visto:${it.id}`]) mudaram.push(it.id);
+    } catch (e) { console.warn("verificar item", it.id, e); }
+  }
+  if (!mudaram.length) return { configurado: true, sincronizou: false };
+  const r = await sincronizar(origem);
+  return { configurado: true, sincronizou: true, ...r };
+}
+
 // ------------------------------------------------------------------ Open Finance
 
 async function sincronizar(origem: string) {
   const log = ok(await db.from("sync_log").insert({ origem }).select("id").single()) as any;
-  const resumo = { novas: 0, atualizadas: 0, removidas: 0, vinculadas: 0, contas: 0, investimentos: 0, emprestimos: 0, pagamentos: 0, avisos: [] as string[] };
+  const resumo = { novas: 0, atualizadas: 0, removidas: 0, vinculadas: 0, contas: 0, investimentos: 0, emprestimos: 0, pagamentos: 0, notificadas: 0, avisos: [] as string[] };
+  const novasParaAvisar: NovaTx[] = [];
   try {
     const cfg = await lerConfig(["pluggy_client_id", "pluggy_client_secret"]);
     if (!cfg.pluggy_client_id || !cfg.pluggy_client_secret) {
@@ -579,6 +691,8 @@ async function sincronizar(origem: string) {
     for (const it of itens) {
       try {
         const item = await obterItem(apiKey, it.id);
+        const marcador = item.lastUpdatedAt ?? item.updatedAt ?? null;
+        if (marcador) await gravarConfig(`pluggy_visto:${it.id}`, String(marcador));
         ok(await db.from("pluggy_itens").update({
           conector: item.connector?.name ?? null, status: item.status ?? null,
           ultimo_sync: new Date().toISOString(), ultimo_erro: item.error?.message ?? null,
@@ -598,6 +712,7 @@ async function sincronizar(origem: string) {
         for (const c of contas) {
           const r = await sincronizarConta(apiKey, c, rg, cats.porNome, cart);
           resumo.novas += r.novas; resumo.atualizadas += r.atualizadas; resumo.removidas += r.removidas;
+          novasParaAvisar.push(...r.novasRecentes);
         }
 
         try {
@@ -624,6 +739,8 @@ async function sincronizar(origem: string) {
       mensagem: resumo.avisos.join(" | ") || `${resumo.contas} contas, ${resumo.investimentos} investimentos`,
       novas: resumo.novas, atualizadas: resumo.atualizadas, removidas: resumo.removidas, vinculadas: resumo.vinculadas,
     }).eq("id", log.id));
+    try { resumo.notificadas = await notificarNovas(novasParaAvisar); }
+    catch (e) { console.warn("notificações:", e); }
     return resumo;
   } catch (e) {
     await db.from("sync_log").update({ fim: new Date().toISOString(), ok: false, mensagem: e instanceof Error ? e.message : String(e) }).eq("id", log.id);
@@ -952,12 +1069,20 @@ async function sincronizarConta(apiKey: string, conta: any, rg: RegraCompilada[]
     if (Object.keys(upd).length) await db.from("transacoes").update(upd).eq("id", subst.id);
   }
 
+  // Para avisar: só lançamentos realmente novos de uma conta que já existia (não a primeira importação) e recentes
+  const limite = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+  const catPorTx = new Map(comCategoria.map((l) => [l.id, l.categoria_id]));
+  const novasRecentes = (count ?? 0) === 0 ? [] : linhas.filter((l) => !porId.has(l.id) && l.data >= limite && !idsSubstitutos(usados, l.id))
+    .map((l) => ({ id: l.id, data: l.data, descricao: l.descricao, valor: l.valor, sentido: l.sentido, categoria_id: catPorTx.get(l.id) ?? null, conta: conta.marketingName || conta.name }));
   return {
     novas: linhas.filter((l) => !porId.has(l.id)).length,
     atualizadas: linhas.filter((l) => porId.has(l.id)).length,
     removidas: sumiram.length,
+    novasRecentes,
   };
 }
+/** Lançamento que só substituiu outro (o banco trocou o id): não é novidade para avisar. */
+function idsSubstitutos(usados: Set<string>, id: string) { return usados.has(id); }
 
 // ------------------------------------------------------------------ recategorizar
 
@@ -1154,6 +1279,35 @@ async function rotear(rota: string, req: Request, corpo: any, quem: Quem): Promi
     case "/sync":
       return json(await sincronizar(quem.cron ? "agendado" : `app (${quem.email})`));
 
+    case "/verificar":
+      return json(await verificarAtualizacoes(quem.cron ? "verificação automática" : `app aberto (${quem.email})`));
+
+    case "/notificacoes": {
+      const casa = casaAtual();
+      const acao = String(corpo.acao ?? "chave");
+      if (acao === "chave") return json({ publica: (await chavesVapid()).publica });
+      const sub = corpo.subscription as AssinaturaPush | undefined;
+      const endpoint = String(sub?.endpoint ?? corpo.endpoint ?? "");
+      if (!/^https:\/\//.test(endpoint)) throw new HttpErro(400, "Assinatura de notificação inválida");
+      const chave = await chaveAssinatura(endpoint);
+      if (acao === "assinar") {
+        if (!sub?.keys?.p256dh || !sub?.keys?.auth) throw new HttpErro(400, "Assinatura de notificação incompleta");
+        const prefs: PrefsPush = { despesas: corpo.despesas !== false, receitas: corpo.receitas !== false, valores: corpo.valores !== false, email: quem.email };
+        await gravarConfigDe(casa, chave, JSON.stringify({ sub: { endpoint, keys: sub.keys }, prefs, criado_em: new Date().toISOString() }));
+        return json({ ok: true, prefs });
+      }
+      if (acao === "cancelar") { await gravarConfigDe(casa, chave, null); return json({ ok: true }); }
+      const atual = (await lerConfigDe(casa, [chave]))[chave];
+      if (acao === "estado") return json({ inscrito: !!atual, prefs: atual ? JSON.parse(atual).prefs : null });
+      if (acao === "testar") {
+        if (!atual) throw new HttpErro(400, "Este aparelho não está inscrito");
+        const st = await enviarPush(JSON.parse(atual).sub, { titulo: "Notificações ligadas ✓", corpo: "Você será avisado quando entrar um lançamento novo.", tag: "teste", url: "./#inicio" }, await chavesVapid(), CONTATO_PUSH);
+        if (st === 404 || st === 410) { await gravarConfigDe(casa, chave, null); throw new HttpErro(410, "O navegador cancelou esta inscrição; ligue as notificações de novo"); }
+        return json({ ok: st >= 200 && st < 300, status: st });
+      }
+      throw new HttpErro(400, "Ação desconhecida");
+    }
+
     case "/config": {
       if (req.method === "POST") {
         if ("pluggy_client_id" in corpo) await gravarConfig("pluggy_client_id", String(corpo.pluggy_client_id ?? "").trim());
@@ -1222,11 +1376,16 @@ Deno.serve(async (req) => {
 
     if (quem.cron) {
       // Agendamento: sincroniza cada casa com Open Finance configurado, como o robô daquela casa
-      if (rota === "/sync") {
+      if (rota === "/sync" || rota === "/verificar") {
         const casas = corpo.casa ? [Number(corpo.casa)] : await casasComPluggy();
         const resultados: any[] = [];
         for (const casa of casas) {
-          try { resultados.push({ casa, ...(await naCasaDoRobo(casa, () => sincronizar("agendado"))) }); }
+          try {
+            const r: Record<string, unknown> = rota === "/sync"
+              ? await naCasaDoRobo(casa, () => sincronizar("agendado"))
+              : await naCasaDoRobo(casa, () => verificarAtualizacoes("verificação automática"));
+            resultados.push({ casa, ...r });
+          }
           catch (e) { resultados.push({ casa, erro: e instanceof Error ? e.message : String(e) }); }
         }
         return json({ casas: resultados });
