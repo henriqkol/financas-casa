@@ -10,6 +10,7 @@
 //   POST /ignorar-nota    {nota_id, ignorar}
 //   POST /categorizar-item       {item_id, categoria_id, aprender}
 //   POST /categorizar-transacao  {transacao_id, categoria_id, aprender}
+//   POST /categorizar-lote       {transacao_ids, categoria_id, aprender}  → triagem de vários parecidos
 //   POST /recategorizar   {}          → reaplica as regras (após mudar regras)
 //   POST /sync            {}          → busca contas e lançamentos no Open Finance
 //   GET  /config  · POST /config {pluggy_client_id, pluggy_client_secret, anthropic_key}
@@ -87,11 +88,14 @@ function ok<T>(r: { data: T; error: any }): T {
   return r.data;
 }
 
-/** Busca todas as linhas de uma consulta paginando de 1000 em 1000. */
-async function todos<T = any>(consulta: (de: number, ate: number) => any): Promise<T[]> {
+/** Busca todas as linhas de uma consulta paginando de 1000 em 1000.
+ *  Sem ORDER BY as páginas podem repetir ou pular linhas: ordena por `chave` (colunas separadas por vírgula) quando a consulta não tem ordem. */
+async function todos<T = any>(consulta: (de: number, ate: number) => any, chave = "id"): Promise<T[]> {
   const out: T[] = [];
   for (let de = 0; ; de += 1000) {
-    const lote = ok<T[]>(await consulta(de, de + 999));
+    let qb = consulta(de, de + 999);
+    if (!String(qb.url ?? "").includes("order=")) for (const c of chave.split(",")) qb = qb.order(c.trim(), { ascending: true, nullsFirst: true });
+    const lote = ok<T[]>(await qb);
     out.push(...lote);
     if (lote.length < 1000) break;
   }
@@ -224,10 +228,21 @@ async function clienteRobo(casa: number): Promise<SupabaseClient> {
   return c;
 }
 
+const dormir = (ms: number) => new Promise((ok) => setTimeout(ok, ms));
+
 async function naCasaDoRobo<T>(casa: number, fn: () => Promise<T>): Promise<T> {
   const cli = await clienteRobo(casa);
-  try { return await contexto.run({ db: cli, casa }, fn); }
-  finally { await cli.auth.signOut().catch(() => {}); }
+  // Login recém-feito: o relógio do banco pode estar alguns instantes atrás do servidor de login
+  // ("JWT issued at future"). Espera um pouco e tenta de novo uma vez.
+  await dormir(1200);
+  try {
+    try { return await contexto.run({ db: cli, casa }, fn); }
+    catch (e) {
+      if (!/issued at future/i.test(e instanceof Error ? e.message : String(e))) throw e;
+      await dormir(2500);
+      return await contexto.run({ db: cli, casa }, fn);
+    }
+  } finally { await cli.auth.signOut({ scope: "local" }).catch(() => {}); }
 }
 
 /** Casas com Open Finance configurado (para a sincronização agendada). */
@@ -700,8 +715,8 @@ async function montarSugestoes() {
     db.from("orcamento_itens").select("grupo_id, nome, valor, periodicidade_meses, ativo").then((r) => r.data ?? []),
   ]);
   const [gastosLin, receitasLin, fluxo, txs, contas, dividas, vdiv, invs, prefs, pend, notasUf] = await Promise.all([
-    todos((de, ate) => db.from("v_gastos").select("transacao_id, mes, categoria, categoria_id, valor, via_nota").eq("conta_como_gasto", true).gte("mes", desde12).range(de, ate)),
-    todos((de, ate) => db.from("v_receitas").select("mes, categoria, valor").gte("mes", desdeMes).range(de, ate)),
+    todos((de, ate) => db.from("v_gastos").select("transacao_id, mes, categoria, categoria_id, valor, via_nota").eq("conta_como_gasto", true).gte("mes", desde12).range(de, ate), "transacao_id,categoria_id"),
+    todos((de, ate) => db.from("v_receitas").select("mes, categoria, valor").gte("mes", desdeMes).range(de, ate), "transacao_id"),
     ok(await db.from("v_fluxo_mensal").select("mes, pagamento_dividas").gte("mes", desdeMes)),
     todos((de, ate) => db.from("transacoes").select("id, data, descricao, recebedor_nome, valor, tipo_operacao, categoria_id").eq("sentido", "saida").eq("removida", false).gte("data", desdeDia).range(de, ate)),
     ok(await db.from("contas").select("nome, apelido, tipo, saldo, negativo_em_acordo").eq("ativa", true)),
@@ -805,17 +820,22 @@ async function montarSugestoes() {
 
 // ------------------------------------------------------------------ metas
 
-async function dadosEMetas() {
+/** Metas de um mês. Mês passado: calcula como estava no último dia dele (contas, orçamento, resultado). */
+async function dadosEMetas(mesPedido?: string) {
   await reconhecerPagamentosDeDividas().catch((e) => console.warn("pagamentos:", e));
   const cart = await carteiras();
-  const hoje = hojeBrasilia();
-  const mes = hoje.slice(0, 7);
+  const hojeReal = hojeBrasilia();
+  const mesReal = hojeReal.slice(0, 7);
+  const mes = typeof mesPedido === "string" && /^\d{4}-\d{2}$/.test(mesPedido) && mesPedido < mesReal ? mesPedido : mesReal;
+  const historico = mes !== mesReal;
+  // mês passado: "hoje" é o último dia dele
+  const hoje = historico ? addDias(addDias(`${mes}-01`, 40).slice(0, 7) + "-01", -1) : hojeReal;
   const [prefs, receitas, grupos, itens, gastos, pixCat, saidas, acordos, fluxo, contas, invs, objetivos] = await Promise.all([
     ok(await db.from("preferencias").select("chave, valor")),
-    todos((de, ate) => db.from("v_receitas").select("valor").eq("mes", mes).range(de, ate)),
+    todos((de, ate) => db.from("v_receitas").select("valor").eq("mes", mes).lte("data", hoje).range(de, ate), "transacao_id"),
     ok(await db.from("orcamento_grupos").select("id, nome, ordem, categorias, observacao")),
     ok(await db.from("orcamento_itens").select("*").eq("ativo", true).order("ordem")),
-    todos((de, ate) => db.from("v_gastos").select("categoria_id, categoria, valor").eq("mes", mes).eq("conta_como_gasto", true).range(de, ate)),
+    todos((de, ate) => db.from("v_gastos").select("categoria_id, categoria, valor").eq("mes", mes).eq("conta_como_gasto", true).lte("data", hoje).range(de, ate), "transacao_id,categoria_id"),
     ok(await db.from("categorias").select("id").eq("nome", "Pix para esposa (sem nota)").maybeSingle()),
     todos((de, ate) => db.from("transacoes").select("id, data, valor, descricao, recebedor_nome, recebedor_ispb, observacao, categorias(nome)").eq("sentido", "saida").eq("removida", false)
       .gte("data", `${mes}-01`).lte("data", hoje).range(de, ate)),
@@ -828,8 +848,9 @@ async function dadosEMetas() {
   const p = Object.fromEntries((prefs as any[]).map((x) => [x.chave, x.valor]));
   const idsAcordos = (acordos as any[]).map((a) => a.id);
   const pagamentos = idsAcordos.length ? ok(await db.from("divida_pagamentos").select("divida_id, data, valor").in("divida_id", idsAcordos)) as any[] : [];
-  const colchao = (contas as any[]).filter((c) => c.tipo === "BANK" && Number(c.saldo) > 0).reduce((s, c) => s + Number(c.saldo), 0)
-    + (invs as any[]).filter((i) => i.status !== "TOTAL_WITHDRAWAL").reduce((s, i) => s + Number(i.saldo_liquido ?? 0), 0);
+  const colchaoContas = (contas as any[]).filter((c) => c.tipo === "BANK" && Number(c.saldo) > 0).reduce((s, c) => s + Number(c.saldo), 0);
+  const colchaoInvest = (invs as any[]).filter((i) => i.status !== "TOTAL_WITHDRAWAL").reduce((s, i) => s + Number(i.saldo_liquido ?? 0), 0);
+  const colchao = colchaoContas + colchaoInvest;
   const r = montarMetas({
     hoje, renda_plano: Number(p.renda_mensal ?? 0),
     receitas_mes: (receitas as any[]).reduce((s, x) => s + Number(x.valor), 0),
@@ -845,16 +866,16 @@ async function dadosEMetas() {
     acordos: (acordos as any[]).map((a) => ({ ...a, parcela_valor: Number(a.parcela_valor), saldo_devedor: a.saldo_devedor != null ? Number(a.saldo_devedor) : null, vencimentos: a.vencimentos ?? [] })),
     pagamentos: pagamentos.map((x) => ({ ...x, valor: Number(x.valor) })),
     fluxo: (fluxo as any[]).map((f) => ({ mes: f.mes, sobra: Number(f.sobra) })),
-    colchao,
+    colchao, colchao_partes: { contas: colchaoContas, investido: colchaoInvest },
     objetivos: (objetivos as any[]).map((o) => ({ ...o, valor_alvo: o.valor_alvo != null ? Number(o.valor_alvo) : null, valor_atual: o.valor_atual != null ? Number(o.valor_atual) : null })),
     inicio_relogio: p.acordos_ultimo_atraso ?? "2026-09-28",
     inicio_plano: p.plano_inicio ?? "2026-10-01",
   });
   // Atraso quebra a sequência de meses em dia: o relógio recomeça a partir de hoje
-  if (r.atraso_acordo && p.acordos_ultimo_atraso !== hoje) {
+  if (!historico && r.atraso_acordo && p.acordos_ultimo_atraso !== hoje) {
     await db.from("preferencias").upsert({ chave: "acordos_ultimo_atraso", valor: hoje, atualizado_em: new Date().toISOString() });
   }
-  return r;
+  return { ...r, historico, mes_atual: mesReal, renda_origem: p.renda_mensal ? "informada" : "nao_informada" };
 }
 
 async function sincronizarConta(apiKey: string, conta: any, rg: RegraCompilada[], cat: Record<string, number>, cart: CarteiraDespesa[] = []) {
@@ -956,7 +977,7 @@ async function recategorizar() {
     }
   }
   // Gastos com nota seguem a categoria dos itens
-  const vinculados = await todos((de, ate) => db.from("nota_transacao").select("transacao_id").range(de, ate)) as any[];
+  const vinculados = await todos((de, ate) => db.from("nota_transacao").select("transacao_id").range(de, ate), "nota_id,transacao_id") as any[];
   for (const id of new Set(vinculados.map((v) => v.transacao_id))) await atualizarCategoriaPelaNota(id);
   return { itens_alterados: mudouItens, gastos_alterados: mudouTx };
 }
@@ -1049,6 +1070,37 @@ async function rotear(rota: string, req: Request, corpo: any, quem: Quem): Promi
       return json({ ok: true, outros_atualizados: outros });
     }
 
+    case "/categorizar-lote": {
+      // Triagem: vários lançamentos parecidos de uma vez; aprende uma regra por descrição
+      const ids: string[] = [...new Set<string>((corpo.transacao_ids ?? []).map(String))].slice(0, 3000);
+      if (!ids.length) throw new HttpErro(400, "Nenhum lançamento informado");
+      const cat = corpo.categoria_id == null || corpo.categoria_id === "" ? null : Number(corpo.categoria_id);
+      for (let i = 0; i < ids.length; i += 200) {
+        ok(await db.from("transacoes").update({ categoria_id: cat, categoria_origem: cat ? "manual" : null }).in("id", ids.slice(i, i + 200)));
+      }
+      let outros = 0;
+      if (cat && corpo.aprender) {
+        const txs: any[] = [];
+        for (let i = 0; i < ids.length; i += 200) txs.push(...(ok(await db.from("transacoes").select("id, descricao, recebedor_nome, sentido").in("id", ids.slice(i, i + 200))) as any[]));
+        const chaves = new Map<string, string>();
+        for (const t of txs) { const k = chaveAprendizado(textoTx(t)); if (k) chaves.set(`${t.sentido}|${k}`, t.sentido); }
+        if (chaves.size) {
+          ok(await db.from("regras_categoria").upsert([...chaves.entries()].map(([k, sentido]) => ({
+            casa_id: casaAtual(), alvo: "transacao", tipo: "exato", padrao: k.slice(k.indexOf("|") + 1), categoria_id: cat, prioridade: 1, origem: "aprendida", sentido,
+          })), { onConflict: "casa_id,alvo,tipo,padrao" }));
+          const candidatos = await todos((de, ate) => db.from("transacoes").select("id, descricao, recebedor_nome, sentido")
+            .eq("removida", false).or("categoria_origem.is.null,categoria_origem.not.in.(manual,nota)").range(de, ate)) as any[];
+          const jaFeitos = new Set(ids);
+          const alvo = candidatos.filter((t) => !jaFeitos.has(t.id) && chaves.has(`${t.sentido}|${chaveAprendizado(textoTx(t))}`)).map((t) => t.id);
+          for (let i = 0; i < alvo.length; i += 200) {
+            ok(await db.from("transacoes").update({ categoria_id: cat, categoria_origem: "aprendida" }).in("id", alvo.slice(i, i + 200)));
+          }
+          outros = alvo.length;
+        }
+      }
+      return json({ ok: true, atualizados: ids.length, outros_atualizados: outros });
+    }
+
     case "/pagar-divida": {
       // Liga um lançamento (ou valor avulso) a uma dívida; opcionalmente aprende o texto do extrato.
       const divida = ok(await db.from("dividas").select("id, padrao_pagamento").eq("id", corpo.divida_id).single()) as any;
@@ -1075,7 +1127,7 @@ async function rotear(rota: string, req: Request, corpo: any, quem: Quem): Promi
       return json(await montarSugestoes());
 
     case "/metas":
-      return json(await dadosEMetas());
+      return json(await dadosEMetas(corpo.mes));
 
     case "/sync-pagamentos":
       return json({ pagamentos: await reconhecerPagamentosDeDividas() });

@@ -28,7 +28,9 @@ export interface Sugestao {
   prioridade: number;                             // 1 = mais urgente
   titulo: string;
   texto: string;
-  economia_mensal?: number;
+  economia_mensal?: number;                       // quanto dá para economizar (verde); no_total = true quando entra no "economia possível"
+  impacto_mensal?: number;                        // tamanho do problema (déficit, excesso): mostrado em laranja, nunca soma na economia
+  no_total?: boolean;                             // true = esta economia está incluída no "economia possível"
   itens?: { rotulo: string; valor: number; detalhe?: string }[];
   acao?: { rotulo: string; destino: string; filtro?: string };
 }
@@ -97,6 +99,9 @@ export function gerarDiagnostico(d: DadosSugestoes) {
   const semCategoria = arred(despesas - essencial - imprevistos - estilo);
   const dividasMes = arred(mediaRef(d.pagamentosDivida));
   const sobra = arred(renda - despesas - dividasMes);
+  // Entradas reais (salário + Pix recebidos + reembolsos…) nos mesmos meses, para comparar com a renda planejada
+  const receitasMedia = arred(mediaRef(d.receitas));
+  const sobraReal = arred(receitasMedia - despesas - dividasMes);
   // Últimos 12 meses completos (para imprevistos e viagens, que não acontecem todo mês)
   const ano12 = mesesAnteriores(d.hoje, 12);
   const meses12 = Math.max(ano12.filter((m) => d.gastos.some((g) => g.mes === m)).length, 1);
@@ -110,6 +115,7 @@ export function gerarDiagnostico(d: DadosSugestoes) {
     renda, origem_renda: origemRenda, meses: mesesComDados,
     gasto_ideal: arred(renda * (1 - poupPct)),
     despesas_media: despesas, dividas_media: dividasMes, sobra_media: sobra,
+    receitas_media: receitasMedia, sobra_real: sobraReal,
     essencial: { ideal: arred(renda * essPct), atual: essencial, fixo: essFixo, variavel: essVar },
     estilo_vida: { ideal: arred(renda * estiloPct), atual: estilo },
     imprevistos: { atual: imprevistos, ano: imprevistosAno, meses_base: meses12 },
@@ -176,10 +182,15 @@ export function gerarDiagnostico(d: DadosSugestoes) {
 
   // ---------- Fluxo do mês
   if (renda > 0 && sobra < 0) {
+    const baseRenda = origemRenda === "informada" ? `a renda planejada (${R(renda)}, o salário líquido previsto em "Ajustar plano")` : `a renda (${R(renda)}, ${origemRenda})`;
+    const real = Math.abs(receitasMedia - renda) >= 1
+      ? ` Contando todas as entradas reais desses meses (média de ${R(receitasMedia)}, com Pix recebidos e outras entradas), o resultado foi de ${sobraReal >= 0 ? "+" : "−"}${R(Math.abs(sobraReal))} por mês.`
+      : "";
     S.push({
-      id: "deficit", tipo: "alerta", prioridade: 1, titulo: "Está saindo mais do que entra",
-      texto: `Na média dos últimos ${nMeses} meses, a renda foi ${R(renda)}, mas saíram ${R(despesas)} em despesas e ${R(dividasMes)} em pagamentos de dívidas: um déficit de ${R(-sobra)} por mês, coberto com crédito (cheque especial, fatura). Cortar esse valor é o passo mais importante.`,
-      economia_mensal: arred(-sobra),
+      id: "deficit", tipo: "alerta", prioridade: 1,
+      titulo: sobraReal >= 0 && real ? "A renda planejada não cobre os gastos" : "Está saindo mais do que entra",
+      texto: `Na média dos últimos ${nMeses} meses saíram ${R(despesas)} em despesas do dia a dia e ${R(dividasMes)} em pagamentos de dívidas. Comparado com ${baseRenda}, faltam ${R(-sobra)} por mês.${real} Cortar essa diferença é o passo mais importante.`,
+      impacto_mensal: arred(-sobra),
     });
   }
 
@@ -188,7 +199,7 @@ export function gerarDiagnostico(d: DadosSugestoes) {
     S.push({
       id: "acima-ideal", tipo: "economia", prioridade: 2, titulo: "Gasto mensal acima do ideal para a sua renda",
       texto: `Para guardar ${pct(poupPct)} da renda, o ideal é gastar até ${R(plano.gasto_ideal)} por mês. A média recente foi ${R(despesas)}: ${R(despesas - plano.gasto_ideal)} acima.`,
-      economia_mensal: arred(despesas - plano.gasto_ideal),
+      impacto_mensal: arred(despesas - plano.gasto_ideal),
     });
   }
   const porCategoria = new Map<string, { classe: string | null; media: number; n: number; ultimo: number; anteriores: number; atual: number }>();
@@ -386,7 +397,7 @@ export function gerarDiagnostico(d: DadosSugestoes) {
     S.push({ id: "renda", tipo: "dica", prioridade: 5, titulo: "Informe a renda mensal", texto: "Não identifiquei um salário nas entradas. Informe a renda da casa para o plano de gastos ficar preciso.", acao: { rotulo: "Ajustar plano", destino: "preferencias" } });
   }
   if (d.pendencias.sem_categoria > 0) {
-    S.push({ id: "sem-categoria", tipo: "dica", prioridade: 5, titulo: `${d.pendencias.sem_categoria} lançamento(s) sem categoria`, texto: "Categorizar deixa as sugestões mais certeiras — e o app aprende para as próximas vezes.", acao: { rotulo: "Categorizar", destino: "movimentacoes", filtro: "sem-categoria" } });
+    S.push({ id: "sem-categoria", tipo: "dica", prioridade: 5, titulo: `${d.pendencias.sem_categoria.toLocaleString("pt-BR")} ${d.pendencias.sem_categoria === 1 ? "lançamento" : "lançamentos"} sem categoria`, texto: "Categorizar deixa as sugestões mais certeiras — e o app aprende para as próximas vezes. Na triagem, os lançamentos iguais vêm agrupados e dá para resolver vários de uma vez.", acao: { rotulo: "Categorizar em sequência", destino: "triagem" } });
   }
   if (d.ufs_notas.includes("RS")) {
     S.push({ id: "nfg", tipo: "dica", prioridade: 6, titulo: "Nota Fiscal Gaúcha", texto: "Já que vocês escaneiam as notas: cadastre o CPF no programa Nota Fiscal Gaúcha e peça CPF na nota. Cada compra vira chance nos sorteios mensais e pode dar desconto no IPVA." });
@@ -403,12 +414,20 @@ export function gerarDiagnostico(d: DadosSugestoes) {
   const somaCheque = S.filter((x) => x.id.startsWith("cheque-")).reduce((a, x) => a + (x.economia_mensal ?? 0), 0);
   const sobreposicao = Math.min(somaCheque, S.some((x) => x.id === "juros") ? jurosPorTipo("cheque_especial") : 0);
   const economiaTotal = arred(Math.max(0, S.filter((x) => !foraDoTotal(x.id)).reduce((a, x) => a + (x.economia_mensal ?? 0), 0) - sobreposicao));
+  // Quais sugestões formam o total (para a tela explicar a conta); alta/subiu são alertas de ritmo, sem valor somado
+  for (const x of S) {
+    if (foraDoTotal(x.id) && x.economia_mensal) { x.impacto_mensal ??= x.economia_mensal; delete x.economia_mensal; }
+    x.no_total = !!x.economia_mensal;
+  }
+  const composicao = S.filter((x) => x.no_total).map((x) => ({ titulo: x.titulo, valor: arred(x.economia_mensal ?? 0) }));
+  if (sobreposicao > 0) composicao.push({ titulo: "Juros do cheque especial já contados em \"Saia do cheque especial\"", valor: -arred(sobreposicao) });
 
   return {
     referencia: { meses: ref, mes_atual: mesAtual, cdi_anual: d.cdi_anual },
     plano, reserva, provisoes, metas,
     dividas: { total: totalDividas, parcelas_mes: parcelasMes, comprometimento: Math.round(comprometido * 1000) / 1000, ordem },
     economia_potencial: economiaTotal,
+    economia_composicao: composicao,
     sugestoes: S,
   };
 }

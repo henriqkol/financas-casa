@@ -27,12 +27,14 @@ export interface DadosMetas {
   pagamentos: { divida_id: number; data: string; valor: number }[];
   fluxo: { mes: string; sobra: number }[];
   colchao: number;
+  colchao_partes?: { contas: number; investido: number };        // para explicar de onde vem o colchão
   objetivos: Objetivo[];
   inicio_relogio: string;                                         // último atraso ou 28/09/2026
   inicio_plano?: string;                                          // antes disso, conta não paga não é "atrasada"
 }
 
 const arred = (v: number) => Math.round(v * 100) / 100;
+const fmtR = (v: number) => "R$ " + arred(v).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 /** Texto do extrato digitado no app: regex (ex.: "(BONIFACIO|\\bIVAN\\b)") ou texto simples.
  *  Versões antigas do app passavam tudo para maiúsculas e viravam \\b em \\B: aqui isso é desfeito. */
@@ -165,7 +167,10 @@ export function montarMetas(d: DadosMetas) {
   const objetivos = [...d.objetivos].sort((a, b) => a.ordem - b.ordem).map((o) => {
     let atual = o.valor_atual;
     let detalhe: string | null = null;
-    if (o.fonte === "colchao") atual = arred(d.colchao);
+    if (o.fonte === "colchao") {
+      atual = arred(d.colchao);
+      if (d.colchao_partes) detalhe = `Saldo positivo nas contas (${fmtR(d.colchao_partes.contas)}) + investimentos (${fmtR(d.colchao_partes.investido)}).`;
+    }
     if (o.fonte === "acordos_em_dia") {
       atual = mesesEmDia;
       detalhe = atrasoAgora ? "Há parcela atrasada: pague para não quebrar o acordo." : `Sem atrasos desde ${d.inicio_relogio.split("-").reverse().join("/")}.`;

@@ -52,7 +52,7 @@ export function pontuar(nota: NotaParaVincular, tx: TxCandidata): Candidato | nu
 
   // Proximidade de datas (gasto antes da compra é menos provável)
   pontos -= dias >= 0 ? dias * 3 : Math.abs(dias) * 8;
-  motivos.push(dias === 0 ? "mesmo dia" : dias > 0 ? `${dias} dia(s) depois` : `${-dias} dia(s) antes`);
+  motivos.push(dias === 0 ? "mesmo dia" : dias > 0 ? `${dias} ${dias === 1 ? "dia" : "dias"} depois` : `${-dias} ${dias === -1 ? "dia" : "dias"} antes`);
 
   // Estabelecimento
   const cnpjNota = soDigitos(nota.cnpj);
