@@ -1,0 +1,6 @@
+Fontes do design system GranDom, servidas pelo app:
+- Doto (peso 900)            — Copyright The Doto Project Authors
+- Space Grotesk (400/500/600) — Copyright The Space Grotesk Project Authors
+- Space Mono (400/700)        — Copyright 2016 The Space Mono Project Authors
+Todas sob a SIL Open Font License, versão 1.1 (https://openfontlicense.org).
+Arquivos obtidos dos pacotes @fontsource (subconjunto latin, que cobre os acentos do português).

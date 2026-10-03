@@ -2898,7 +2898,7 @@ const CLASSES = {
   emergencial: "Emergencial · imprevistos",
   estilo_vida: "Estilo de vida",
 };
-const CORES_CLASSE = { essencial_variavel: "var(--acento)", essencial_fixo: "#3b7dd8", emergencial: "#c0564b", estilo_vida: "#e5813b" };
+const CORES_CLASSE = { essencial_variavel: "var(--fg)", essencial_fixo: "var(--fg-dim)", emergencial: "var(--signal-2)", estilo_vida: "var(--fg-mute)" };
 const PERIODOS = { 1: "por mês", 2: "a cada 2 meses", 3: "por trimestre", 6: "por semestre", 12: "por ano" };
 acoes.irCategorias = (el, e) => { e?.preventDefault?.(); estado.abrirCategorias = true; irPara("mais"); };
 
@@ -2924,8 +2924,8 @@ async function telaSugestoes() {
       <p class="nota-texto" style="margin-top:0">${p.origem_renda === "informada" ? `Renda planejada ${Rp(p.renda)} por mês: o salário líquido previsto, que você define em “Ajustar plano”` : `Renda ${Rp(p.renda)} por mês (${esc(p.origem_renda || "não identificada")})`}${p.receitas_media != null && Math.abs(p.receitas_media - p.renda) >= 1 ? `. Entradas reais na média dos meses analisados: ${Rp(p.receitas_media)} (inclui Pix recebidos e reembolsos)` : ""}. Pela regra ${Math.round(p.pct.essencial * 100)}/${Math.round(p.pct.estilo_vida * 100)}/${Math.round(p.pct.poupanca * 100)}, o <strong>gasto ideal é até ${Rp(p.gasto_ideal)}</strong>. Valores atuais: ${mesesTxt}.</p>
       ${barraPlano("Essenciais", p.essencial.atual, p.essencial.ideal, "var(--acento)", false, true)}
       ${p.essencial.fixo != null ? `<div class="plano-sub nota-texto">fixos ${Rp(p.essencial.fixo)} · variáveis ${Rp(p.essencial.variavel)}</div>` : ""}
-      ${barraPlano("Estilo de vida", p.estilo_vida.atual, p.estilo_vida.ideal, "#e5813b", false, true)}
-      ${barraPlano("Sobra para guardar/quitar", p.poupanca.atual, p.poupanca.ideal, "#3b7dd8", true, true)}
+      ${barraPlano("Estilo de vida", p.estilo_vida.atual, p.estilo_vida.ideal, "var(--fg-dim)", false, true)}
+      ${barraPlano("Sobra para guardar/quitar", p.poupanca.atual, p.poupanca.ideal, "var(--fg-dim)", true, true)}
       <ul class="lista" style="margin-top:6px">
         ${p.imprevistos ? `<li class="linha" style="cursor:default"><div class="corpo"><div class="titulo">Imprevistos</div><div class="meta">Pagos pela reserva, fora das metas</div></div><div class="valor num">${Rp(p.imprevistos.atual)}</div></li>` : ""}
         ${p.dividas_media ? `<li class="linha" style="cursor:default"><div class="corpo"><div class="titulo">Parcelas de dívidas</div><div class="meta">Compromisso fixo; a compra já contou quando foi feita</div></div><div class="valor num">${Rp(p.dividas_media)}</div></li>` : ""}
