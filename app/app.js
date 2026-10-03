@@ -1615,7 +1615,7 @@ function telaBloqueio(msg = "") {
   document.body.classList.add("bloqueado");
   let el = $("#telaBloqueio");
   if (!el) { el = document.createElement("div"); el.id = "telaBloqueio"; document.body.appendChild(el); }
-  el.innerHTML = `<div class="login"><div class="marca"><img src="icons/icon-192.png" alt=""><div><h1>Finanças da Casa</h1><div class="nota-texto">App bloqueado</div></div></div>
+  el.innerHTML = `<div class="login"><div class="marca"><img src="icons/dolar-192.png" alt=""><div><h1>Finanças da Casa</h1><div class="nota-texto">App bloqueado</div></div></div>
     <div class="cartao" style="text-align:center">
       <div class="icone-cadeado"><svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg></div>
       <p style="margin:6px 0 14px">Use a digital, o rosto ou o PIN do aparelho para entrar.</p>
@@ -3015,7 +3015,7 @@ function telaLogin(modo = "entrar", msg = "") {
   abas.hidden = true;
   const titulos = { entrar: "Entrar", criar: "Criar conta", recuperar: "Recuperar senha", nova: "Nova senha" };
   app.innerHTML = `<div class="login">
-    <div class="marca"><img src="icons/icon-192.png" alt=""><div><h1>Finanças da Casa</h1><div class="nota-texto">Open Finance + notas fiscais</div></div></div>
+    <div class="marca"><img src="icons/dolar-192.png" alt=""><div><h1>Finanças da Casa</h1><div class="nota-texto">Open Finance + notas fiscais</div></div></div>
     <div class="cartao">
       <h2 style="margin-bottom:6px">${titulos[modo]}</h2>
       ${msg ? `<p class="nota-texto">${msg}</p>` : ""}
