@@ -5,9 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Finanças da Casa</title>
   <meta name="description" content="Controle financeiro da casa com Open Finance e notas fiscais">
-  <meta name="theme-color" content="#F4F3EF" media="(prefers-color-scheme: light)">
-  <meta name="theme-color" content="#0B0B0C" media="(prefers-color-scheme: dark)">
-  <meta name="theme-color" content="#0B0B0C">
+  <meta name="theme-color" content="#F4F3EF" media="(prefers-color-scheme: light)" data-padrao="#F4F3EF">
+  <meta name="theme-color" content="#0B0B0C" media="(prefers-color-scheme: dark)" data-padrao="#0B0B0C">
+  <meta name="theme-color" content="#0B0B0C" data-padrao="#0B0B0C">
+  <script>/* tema escolhido neste aparelho (Mais → Aparência), aplicado antes de pintar a tela */
+    try { var t = localStorage.getItem("tema"); if (t === "claro" || t === "escuro") { document.documentElement.dataset.theme = t === "claro" ? "light" : "dark";
+      document.querySelectorAll('meta[name="theme-color"]').forEach(function (m) { m.content = t === "claro" ? "#F4F3EF" : "#0B0B0C"; }); } } catch (e) {}
+  </script>
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/dolar-192.png">
   <link rel="apple-touch-icon" href="icons/dolar-192.png">

@@ -1824,6 +1824,27 @@ acoes.testarNotificacao = async (el) => {
   el.disabled = false;
 };
 
+// ---------- Tema (claro, escuro ou o do aparelho). Vale só para este aparelho.
+const TEMAS = [["auto", "Seguir o aparelho"], ["claro", "Claro"], ["escuro", "Escuro"]];
+function temaAtual() { try { const t = localStorage.getItem("tema"); return t === "claro" || t === "escuro" ? t : "auto"; } catch { return "auto"; } }
+function aplicarTema(t) {
+  const h = document.documentElement;
+  if (t === "claro") h.dataset.theme = "light"; else if (t === "escuro") h.dataset.theme = "dark"; else delete h.dataset.theme;
+  document.querySelectorAll('meta[name="theme-color"]').forEach((m) => { m.content = t === "claro" ? "#F4F3EF" : t === "escuro" ? "#0B0B0C" : m.dataset.padrao; });
+}
+function htmlEscolhaTema() {
+  const atual = temaAtual();
+  return `<div class="seg" role="radiogroup" aria-label="Tema">${TEMAS.map(([k, n]) => `<button role="radio" aria-checked="${k === atual}" class="${k === atual ? "ativo" : ""}" data-acao="escolherTema" data-tema="${k}">${k === "auto" ? "Automático" : n}</button>`).join("")}</div>
+    <p class="nota-texto" style="margin-bottom:0">Automático segue o modo claro/escuro do celular. A escolha vale só para este aparelho.</p>`;
+}
+acoes.escolherTema = (el) => {
+  const t = el.dataset.tema;
+  try { if (t === "auto") localStorage.removeItem("tema"); else localStorage.setItem("tema", t); } catch { /* sem armazenamento: vale até fechar */ }
+  aplicarTema(t);
+  el.parentElement.querySelectorAll("button").forEach((b) => { const sim = b === el; b.classList.toggle("ativo", sim); b.setAttribute("aria-checked", String(sim)); });
+  const r = $("#resumoTema"); if (r) r.textContent = `· ${TEMAS.find(([k]) => k === t)[1].toLowerCase()}`;
+};
+
 // ---------- Procura dados novos ao abrir o app (no máximo a cada 10 minutos por aparelho)
 async function verificarAoAbrir() {
   if (!navigator.onLine || sessaoOffline || !estado.casa) return;
@@ -1908,6 +1929,7 @@ async function telaMais() {
   $("#conteudo").innerHTML = `
     ${cartaoInstalar()}
     <div id="cartaoBloqueio"></div>
+    <details class="secao" id="secaoAparencia"><summary>Aparência <span class="resumo-secao" id="resumoTema">· ${TEMAS.find(([k]) => k === temaAtual())[1].toLowerCase()}</span></summary><div class="conteudo">${htmlEscolhaTema()}</div></details>
     <details class="secao" id="secaoNotificacoes"><summary>Notificações <span class="resumo-secao" id="resumoNotif"></span></summary><div class="conteudo" id="cartaoNotificacoes"><p class="nota-texto">Verificando…</p></div></details>
     <div class="atalhos">
       <button class="atalho" data-acao="irPatrimonio" data-s="investimentos"><span class="icone-bloco b3">${ICONE.banco}</span><span>Patrimônio</span></button>
