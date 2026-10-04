@@ -3033,67 +3033,18 @@ acoes.salvarPreferencias = async (el) => {
 };
 
 // ------------------------------------------------------------------ LOGIN
-function telaLogin(modo = "entrar", msg = "") {
+function telaLogin(msg = "") {
   abas.hidden = true;
-  const titulos = { entrar: "Entrar", criar: "Criar conta", recuperar: "Recuperar senha", nova: "Nova senha" };
   app.innerHTML = `<div class="login">
     <div class="marca"><img src="icons/dolar-192.png" alt=""><div><h1>Finanças da Casa</h1><div class="nota-texto">Open Finance + notas fiscais</div></div></div>
     <div class="cartao">
-      <h2 style="margin-bottom:6px">${titulos[modo]}</h2>
+      <h2 style="margin-bottom:6px">Entrar</h2>
       ${msg ? `<p class="nota-texto">${msg}</p>` : ""}
-      ${modo === "entrar" ? `<div id="loginGoogle"></div>` : ""}
-      <form id="formLogin">
-        ${modo !== "nova" ? `<label class="campo"><span>E-mail</span><input type="email" id="email" autocomplete="email" required></label>` : ""}
-        ${modo !== "recuperar" ? `<label class="campo"><span>Senha${modo !== "entrar" ? " (mínimo 8 caracteres)" : ""}</span><input type="password" id="senha" autocomplete="${modo === "entrar" ? "current-password" : "new-password"}" minlength="${modo === "entrar" ? 1 : 8}" required></label>` : ""}
-        <button class="botao cheio" type="submit">${titulos[modo]}</button>
-      </form>
-      <div class="botoes" style="justify-content:space-between">
-        ${modo === "entrar" ? `<button class="botao peq sec" data-acao="modoLogin" data-m="criar">Criar conta</button><button class="botao peq sec" data-acao="modoLogin" data-m="recuperar">Esqueci a senha</button>`
-          : modo !== "nova" ? `<button class="botao peq sec" data-acao="modoLogin" data-m="entrar">Voltar</button>` : ""}
-      </div>
+      <button class="botao cheio botao-google" type="button" data-acao="entrarGoogle">Entrar com Google</button>
+      <p class="nota-texto" style="margin-bottom:0">Por segurança, o acesso é só pela sua conta Google. Quem entra pela primeira vez ganha uma casa própria, a não ser que tenha recebido convite para uma casa.</p>
     </div></div>`;
-  $("#formLogin").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const bt = e.submitter; bt.disabled = true;
-    const email = $("#email")?.value.trim(), senha = $("#senha")?.value;
-    const volta = location.origin + location.pathname;
-    try {
-      if (modo === "entrar") {
-        const { error } = await sb.auth.signInWithPassword({ email, password: senha });
-        if (error) throw new Error(error.message === "Invalid login credentials" ? "E-mail ou senha incorretos" : error.message === "Email not confirmed" ? "Confirme seu e-mail pelo link que enviamos" : error.message);
-        location.reload();
-      } else if (modo === "criar") {
-        const { data, error } = await sb.auth.signUp({ email, password: senha, options: { emailRedirectTo: volta } });
-        if (error) throw error;
-        if (data.session) location.reload();
-        else telaLogin("entrar", "Enviamos um e-mail de confirmação. Abra o link e depois entre aqui.");
-      } else if (modo === "recuperar") {
-        const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: volta });
-        if (error) throw error;
-        telaLogin("entrar", "Se o e-mail existir, você vai receber um link para criar uma nova senha.");
-      } else if (modo === "nova") {
-        const { error } = await sb.auth.updateUser({ password: senha });
-        if (error) throw error;
-        location.hash = ""; location.reload();
-      }
-    } catch (err) { avisar(err.message, true); bt.disabled = false; }
-  });
-  if (modo === "entrar") mostrarLoginGoogle();
 }
-acoes.modoLogin = (el) => telaLogin(el.dataset.m);
 
-/** Mostra "Entrar com Google" só se o provedor Google estiver ligado no Supabase. */
-async function mostrarLoginGoogle() {
-  const el = $("#loginGoogle");
-  if (!el || !navigator.onLine) return;
-  try {
-    const r = await fetch(`${SUPABASE_URL}/auth/v1/settings`, { headers: { apikey: SUPABASE_ANON_KEY } });
-    const cfg = await r.json();
-    if (!cfg?.external?.google || !$("#loginGoogle")) return;
-    el.innerHTML = `<button class="botao sec cheio botao-google" type="button" data-acao="entrarGoogle">Entrar com Google</button>
-      <div class="separador"><span>ou com e-mail e senha</span></div>`;
-  } catch { /* sem Google: fica só e-mail e senha */ }
-}
 acoes.entrarGoogle = async (el) => {
   el.disabled = true;
   const { error } = await sb.auth.signInWithOAuth({
@@ -3103,6 +3054,15 @@ acoes.entrarGoogle = async (el) => {
   if (error) { avisar(error.message, true); el.disabled = false; }
 };
 
+/** A sessão foi aberta pelo Google? (método de login gravado no token) */
+function sessaoPeloGoogle(session) {
+  try {
+    const p = session.access_token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
+    const amr = JSON.parse(atob(p + "=".repeat((4 - (p.length % 4)) % 4))).amr ?? [];
+    return amr.some((a) => a.method === "oauth");
+  } catch { return true; }  // token ilegível: o servidor decide
+}
+
 // ------------------------------------------------------------------ início do app
 async function iniciar() {
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
@@ -3110,17 +3070,16 @@ async function iniciar() {
     app.innerHTML = `<div class="vazio"><strong>App ainda não configurado</strong>Preencha o endereço do Supabase em app/config.js.</div>`;
     return;
   }
-  let recuperando = false;
-  sb.auth.onAuthStateChange((evento) => {
-    if (evento === "PASSWORD_RECOVERY") { recuperando = true; telaLogin("nova", "Escolha a nova senha."); }
-  });
   let session = null;
   if (navigator.onLine) {
     const semResposta = new Promise((ok) => setTimeout(() => ok({ data: { session: null } }), 8000));
     ({ data: { session } } = await Promise.race([sb.auth.getSession().catch(() => ({ data: { session: null } })), semResposta]));
   }
-  if (recuperando) return;
-  if (session && HASH_INICIAL.includes("type=recovery")) return telaLogin("nova", "Escolha a nova senha.");
+  if (session && !sessaoPeloGoogle(session)) {
+    // Sessão antiga aberta com e-mail e senha: o app agora só aceita Google
+    await sb.auth.signOut().catch(() => {});
+    return telaLogin("O acesso agora é só pelo Google. Entre de novo com a sua conta Google.");
+  }
   if (!session && !navigator.onLine) {
     // Sem internet o login não pode ser renovado (e a biblioteca ficaria tentando): usa a sessão guardada só para abrir os dados salvos
     try {
@@ -3132,7 +3091,7 @@ async function iniciar() {
   if (!session) {
     // Volta do Google com erro (ex.: cancelou a escolha da conta)
     const erroOAuth = new URLSearchParams(HASH_INICIAL.slice(1) || location.search.slice(1)).get("error_description");
-    if (erroOAuth) { history.replaceState(null, "", location.pathname); return telaLogin("entrar", `Não foi possível entrar com o Google: ${esc(erroOAuth)}`); }
+    if (erroOAuth) { history.replaceState(null, "", location.pathname); return telaLogin(`Não foi possível entrar com o Google: ${esc(erroOAuth)}`); }
     return telaLogin();
   }
   estado.email = session.user.email?.toLowerCase();
