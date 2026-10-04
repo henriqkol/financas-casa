@@ -819,3 +819,7 @@ label.campo > span { font-family: var(--font-mono); font-size: 11px; letter-spac
 
 /* Texto pequeno dentro de valores grandes (ex.: "por mês" no hero) */
 .destaque .valor .nota-texto { font-family: var(--font-body); font-size: 14px !important; font-weight: 400; letter-spacing: 0; text-transform: none; display: block; margin-top: 6px; }
+
+/* Botão do Google: logo colorido no lugar do ponto vermelho */
+.botao.botao-google::before { display: none; }
+.botao-google .logo-google { width: 20px; height: 20px; flex: none; }
