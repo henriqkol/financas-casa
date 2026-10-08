@@ -589,3 +589,27 @@ test("regra 'sem categoria' vence as outras e deixa o lançamento para classific
   assert.equal(categorizarTransacao({ descricao: "Compra|ZAFFARI", sentido: "saida" }, rg, {})?.categoria_id, 9);
   assert.equal(regraSemCategoria({ descricao: "Compra|ZAFFARI", sentido: "saida" }, rg), null);
 });
+
+test("metas: pagamento ligado à mão vale para o mês escolhido e sai do reconhecimento automático", () => {
+  const item = { id: 3, nome: "Internet", valor: 129.9, periodicidade_meses: 1, tipo: "conta", dia_vencimento: 10, forma_pagamento: "Pix automático", padrao: "(WS-NET|WS NET|WSNET)", observacao: null };
+  const tx = { id: "ws", data: "2026-09-28", valor: 129.9, texto: "Pagamento efetuado|WS-NET INTERNET E DADOS LTDA" };
+  // outubro: o pagamento de 28/09 foi ligado à conta de outubro
+  const out: any = dadosMetas({ hoje: "2026-10-12", inicio_plano: "2026-10-01" });
+  out.grupos[0].itens.push({ ...item });
+  out.saidas_mes = [];
+  out.ligados = [{ item_id: 3, tx: { id: tx.id, data: tx.data, valor: tx.valor } }];
+  out.ligados_ids = ["ws"];
+  const c = montarMetas(out).contas.find((x: any) => x.nome === "Internet")!;
+  assert.equal(c.status, "pago");
+  assert.equal(c.pago_em, "2026-09-28");
+  assert.equal(c.manual, true);
+  // setembro: o mesmo pagamento não conta mais sozinho
+  const set: any = dadosMetas({ hoje: "2026-09-30", inicio_plano: "2026-09-01" });
+  set.grupos[0].itens.push({ ...item });
+  set.saidas_mes = [tx];
+  set.ligados = []; set.ligados_ids = ["ws"];
+  assert.equal(montarMetas(set).contas.find((x: any) => x.nome === "Internet")!.status, "atrasado");
+  // sem ligação, setembro reconhece normalmente
+  set.ligados_ids = [];
+  assert.equal(montarMetas(set).contas.find((x: any) => x.nome === "Internet")!.status, "pago");
+});

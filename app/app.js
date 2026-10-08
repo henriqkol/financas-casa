@@ -961,10 +961,12 @@ async function abrirTransacao(id) {
   const notasLivres = t.sentido === "saida" ? await q(sb.from("notas").select("id, nome_emitente, valor_pago, emissao")
     .in("vinculo_status", ["pendente", "confirmar"]).gte("emissao", de).lte("emissao", ate).order("emissao", { ascending: false }).limit(30)).catch(() => []) : [];
   notasLivres.sort((a, b) => Math.abs(a.valor_pago - t.valor) - Math.abs(b.valor_pago - t.valor));
-  const [dividasAtivas, pagamentoDivida] = t.sentido === "saida" ? await Promise.all([
+  const [dividasAtivas, pagamentoDivida, contasPlano, ligacoes] = t.sentido === "saida" ? await Promise.all([
     q(sb.from("dividas").select("id, nome").eq("ativa", true).eq("origem", "manual").order("nome")).catch(() => []),
     q(sb.from("divida_pagamentos").select("id, dividas(nome)").eq("transacao_id", t.id).maybeSingle()).catch(() => null),
-  ]) : [[], null];
+    contasDoPlano().catch(() => []),
+    carregarPagamentosConta().catch(() => ({})),
+  ]) : [[], null, [], {}];
   const manual = String(t.id).startsWith("manual-");
   const nomeBanco = partesDescricao(t.descricao)[1];
   const chave = chaveNome(t.descricao);
@@ -1021,6 +1023,7 @@ async function abrirTransacao(id) {
         <label class="check"><input type="checkbox" id="dvAprender" checked> Reconhecer sozinho os próximos pagamentos com esta descrição</label>
         <button class="botao peq" data-acao="ligarDivida" data-tx="${esc(t.id)}">Registrar pagamento</button>
       </div></div>` : ""}
+    ${t.sentido === "saida" && contasPlano.length ? cartaoContaPaga(t, contasPlano, ligacoes[t.id]) : ""}
     <div class="cartao">
       <h3>Observação <span class="salvo" id="salvoObs"></span></h3>
       <textarea id="obsTx" rows="2" placeholder="Ex.: presente de aniversário" data-id="${esc(t.id)}">${esc(t.observacao ?? "")}</textarea>
@@ -2646,16 +2649,113 @@ acoes.irMetas = (el) => { estado.abaMetas = el?.dataset?.s || estado.abaMetas ||
 acoes.mesMetasAnterior = () => { estado.mes = somarMes(estado.mes > mesAtual() ? mesAtual() : estado.mes, -1); recarregar(); };
 acoes.mesMetasSeguinte = () => { const m = somarMes(estado.mes, 1); if (m <= mesAtual()) { estado.mes = m; recarregar(); } };
 
-function linhaConta(c) {
+// ---------- Pagamento de conta ligado à mão (pago antes ou depois do mês do vencimento)
+// Guardado em preferencias "pagamentos_conta" = { transacao_id: { item, mes } }. O servidor usa ao montar as metas.
+async function carregarPagamentosConta() {
+  const r = await q(sb.from("preferencias").select("valor").eq("chave", "pagamentos_conta").maybeSingle());
+  try { return r?.valor ? JSON.parse(r.valor) ?? {} : {}; } catch { return {}; }
+}
+async function alterarPagamentoConta(txId, valor) {
+  const mapa = await carregarPagamentosConta();   // relê para não perder ligações feitas em outro aparelho
+  if (valor) mapa[txId] = valor; else delete mapa[txId];
+  await q(sb.from("preferencias").upsert({ chave: "pagamentos_conta", valor: JSON.stringify(mapa), atualizado_em: new Date().toISOString() }));
+  cacheMetas = null; cacheSugestoes = null; estado.folhaSujou = true;
+}
+async function contasDoPlano() {
+  const itens = await q(sb.from("orcamento_itens").select("id, nome, valor, dia_vencimento, periodicidade_meses").eq("ativo", true).eq("tipo", "conta").order("nome"));
+  return itens.filter((i) => (i.periodicidade_meses ?? 1) === 1);
+}
+/** Mês provável da conta paga em `data`: o do próximo vencimento a partir do pagamento. */
+function mesProvavelConta(data, dia) {
+  const mes = data.slice(0, 7);
+  return dia && Number(data.slice(8, 10)) > dia ? somarMes(mes, 1) : mes;
+}
+const nomeMesLongo = (m) => nomeMes(m).toLowerCase();
+function cartaoContaPaga(t, contas, lig) {
+  const conta = lig ? contas.find((c) => c.id === Number(lig.item)) : null;
+  const sugerida = conta ?? contas.slice().sort((a, b) => Math.abs(a.valor - t.valor) - Math.abs(b.valor - t.valor))[0];
+  return `<div class="cartao" id="cartaoContaPaga">
+    <h3>Conta do plano</h3>
+    ${lig ? `<p class="nota-texto" style="margin-top:0">Este pagamento quita a conta <strong>${esc(conta?.nome ?? "removida do plano")}</strong> de <strong>${esc(nomeMesLongo(lig.mes))}</strong>. Ele não conta para nenhum outro mês.</p>
+      <div class="botoes"><button class="botao peq sec" data-acao="mostrarLigarConta">Trocar</button><button class="botao peq sec" data-acao="desligarContaPaga" data-tx="${esc(t.id)}">Desligar</button></div>`
+      : `<p class="nota-texto" style="margin-top:0">Pagou uma conta do plano antes ou depois do mês do vencimento? Ligue aqui para ela aparecer paga no mês certo.</p>
+      <div class="botoes"><button class="botao peq sec" data-acao="mostrarLigarConta">Ligar a uma conta</button></div>`}
+    <div id="blocoLigarConta" hidden>
+      <label class="campo"><span>Conta</span><select id="lcItem" data-muda="contaPagaEscolhida">${contas.map((c) => `<option value="${c.id}" data-dia="${c.dia_vencimento ?? ""}" ${c.id === sugerida?.id ? "selected" : ""}>${esc(c.nome)} · ${R(c.valor)}${c.dia_vencimento ? ` · dia ${c.dia_vencimento}` : ""}</option>`).join("")}</select></label>
+      <label class="campo"><span>Mês da conta</span><input type="month" id="lcMes" value="${esc(lig?.mes ?? mesProvavelConta(t.data, sugerida?.dia_vencimento))}"></label>
+      <button class="botao peq" data-acao="ligarContaPaga" data-tx="${esc(t.id)}">Ligar</button>
+    </div></div>`;
+}
+acoes.mostrarLigarConta = () => { const b = $("#blocoLigarConta"); b.hidden = false; b.scrollIntoView({ block: "nearest", behavior: "smooth" }); };
+mudancas.contaPagaEscolhida = (el) => {
+  const dia = Number(el.selectedOptions[0]?.dataset.dia) || null;
+  if (estado.txAberta) $("#lcMes").value = mesProvavelConta(estado.txAberta.data, dia);
+};
+acoes.ligarContaPaga = async (el) => {
+  const item = Number($("#lcItem").value), mes = $("#lcMes").value;
+  if (!item || !/^\d{4}-\d{2}$/.test(mes)) return avisar("Escolha a conta e o mês", true);
+  el.disabled = true;
+  try {
+    await alterarPagamentoConta(el.dataset.tx, { item, mes });
+    avisar(`Ligado à conta de ${nomeMesLongo(mes)}`);
+    abrirTransacao(el.dataset.tx);
+  } catch (e) { avisar(e.message, true); el.disabled = false; }
+};
+acoes.desligarContaPaga = async (el) => {
+  el.disabled = true;
+  try { await alterarPagamentoConta(el.dataset.tx, null); avisar("Pagamento desligado da conta"); abrirTransacao(el.dataset.tx); }
+  catch (e) { avisar(e.message, true); el.disabled = false; }
+};
+/** Metas → conta em aberto → "Já paguei": escolhe o pagamento entre as saídas dos últimos 45 dias antes do vencimento até hoje. */
+acoes.jaPaguei = async (el) => {
+  const itemId = Number(el.dataset.item), mes = el.dataset.mes;
+  abrirFolha(carregando());
+  try {
+    const [itens, ligacoes] = await Promise.all([contasDoPlano(), carregarPagamentosConta()]);
+    const item = itens.find((i) => i.id === itemId);
+    if (!item) throw new Error("Conta não encontrada no plano");
+    const venc = `${mes}-${String(Math.min(item.dia_vencimento ?? 28, 28)).padStart(2, "0")}`;
+    const de = new Date(new Date(venc + "T12:00:00").getTime() - 45 * 86400000).toISOString().slice(0, 10);
+    const ate = [hojeISO(), new Date(new Date(venc + "T12:00:00").getTime() + 45 * 86400000).toISOString().slice(0, 10)].sort()[0];
+    const txs = await q(sb.from("transacoes").select("id, data, valor, descricao, recebedor_nome, contas(apelido, nome)")
+      .eq("sentido", "saida").eq("removida", false).gte("data", de).lte("data", ate).order("data", { ascending: false }).limit(400));
+    const nomes = Object.fromEntries(itens.map((i) => [i.id, i.nome]));
+    // mais parecidos primeiro: valor perto do previsto, depois os mais recentes
+    const lista = txs.map((t) => ({ ...t, valor: Number(t.valor), dif: Math.abs(Number(t.valor) - item.valor) / Math.max(item.valor, 1) }))
+      .sort((a, b) => (a.dif > 0.3) - (b.dif > 0.3) || a.dif - b.dif || b.data.localeCompare(a.data)).slice(0, 25);
+    abrirFolha(`
+      <h2 style="margin-right:40px">Já paguei: ${esc(item.nome)}</h2>
+      <p class="nota-texto">Conta de ${esc(nomeMesLongo(mes))}${item.dia_vencimento ? `, vence ${dataCurta(venc).slice(0, 5)}` : ""} · ${R(item.valor)}. Escolha o pagamento que quitou esta conta. Ele passa a contar só para este mês.</p>
+      ${lista.length ? `<div class="lista-candidatos">${lista.map((t) => {
+        const lig = ligacoes[t.id];
+        return `<div class="candidato"><div class="corpo"><div class="titulo">${esc(tituloTx(t))}</div>
+          <div class="meta nota-texto">${dataCurta(t.data)} · ${R(t.valor)} · ${esc(t.contas?.apelido || t.contas?.nome || "")}${lig ? ` · já ligado a ${esc(nomes[lig.item] ?? "outra conta")} de ${esc(nomeMesLongo(lig.mes))}` : ""}</div></div>
+          <button class="botao peq sec" data-acao="ligarJaPaguei" data-tx="${esc(t.id)}" data-item="${itemId}" data-mes="${mes}">${lig ? "Mover" : "Ligar"}</button></div>`;
+      }).join("")}</div>` : `<p class="nota-texto">Nenhum pagamento encontrado perto do vencimento. Se pagou em dinheiro, lance pelo botão “+” e volte aqui.</p>`}`);
+  } catch (e) { fecharFolha(); avisar(e.message, true); }
+};
+acoes.ligarJaPaguei = async (el) => {
+  el.disabled = true;
+  try {
+    await alterarPagamentoConta(el.dataset.tx, { item: Number(el.dataset.item), mes: el.dataset.mes });
+    avisar(`Conta de ${nomeMesLongo(el.dataset.mes)} marcada como paga`);
+    fecharFolha();
+  } catch (e) { avisar(e.message, true); el.disabled = false; }
+};
+
+function linhaConta(c, mes) {
   const difere = c.status === "pago" && c.pago_valor && Math.abs(c.pago_valor - c.valor) > c.valor * 0.05;
   const quando = c.status === "pago" ? (c.pago_em ? `pago em ${dataCurta(c.pago_em).slice(0, 5)}` : "pago") + (difere ? ` · ${R(c.pago_valor)} (${c.pago_valor < c.valor ? "abaixo" : "acima"} do previsto)` : "")
     : c.status === "parcial" ? `pago ${R(c.pago_valor)} de ${R(c.valor)}` : c.data ? NOME_STATUS[c.status] : "a pagar · sem dia de vencimento";
+  const aMao = c.manual ? " · ligado à mão" : "";
+  const botaoPaguei = c.tipo === "conta" && c.status !== "pago" && mes
+    ? `<button class="botao peq sec botao-paguei" data-acao="jaPaguei" data-item="${c.ref}" data-mes="${mes}">Já paguei</button>` : "";
   const [, mm, dd] = (c.data ?? "").split("-");
   const selo = c.data ? `<span class="data-conta ${c.status}" aria-label="vence dia ${Number(dd)}"><b>${Number(dd)}</b><small>${MESES_CURTOS[Number(mm) - 1]}</small></span>`
     : `<span class="data-conta sem-dia" aria-label="sem dia de vencimento"><b>?</b><small>dia</small></span>`;
   return `<li class="linha conta-mes ${c.status}" ${c.tipo === "acordo" ? `data-acao="abrirDivida" data-id="${c.ref}"` : `data-acao="editarItemOrcamento" data-id="${c.ref}"`}>
     ${selo}
-    <div class="corpo"><div class="titulo">${esc(c.nome)}</div><div class="meta"><span class="status-txt ${c.status}">${ICONE_STATUS[c.status]} ${quando}</span>${c.forma ? ` · ${esc(c.forma)}` : ""}</div></div>
+    <div class="corpo"><div class="titulo">${esc(c.nome)}</div><div class="meta"><span class="status-txt ${c.status}">${ICONE_STATUS[c.status]} ${quando}${aMao}</span>${c.forma ? ` · ${esc(c.forma)}` : ""}</div>${botaoPaguei}</div>
     <div class="valor num">${c.tipo === "acordo" ? Rp(c.valor) : R(c.valor)}</div><span class="seta" aria-hidden="true">›</span></li>`;
 }
 
@@ -2681,9 +2781,9 @@ function htmlMes(d) {
 
     <div class="cartao">
       <h3>Contas do mês <span class="nota-texto" style="font-weight:400;text-transform:none;letter-spacing:0">· ${pagas.length} de ${d.contas.length} pagas</span></h3>
-      <ul class="lista">${pend.map(linhaConta).join("")}</ul>
-      ${pagas.length ? `<details class="pagas"><summary class="nota-texto">Já pagas (${pagas.length})</summary><ul class="lista">${pagas.map(linhaConta).join("")}</ul></details>` : ""}
-      <p class="nota-texto">Você não precisa marcar nada: o app reconhece o pagamento no extrato (sincroniza 2x por dia). Tocar numa conta abre os detalhes para ajustar valor, dia de vencimento ou o texto que aparece no extrato.</p>
+      <ul class="lista">${pend.map((c) => linhaConta(c, d.mes)).join("")}</ul>
+      ${pagas.length ? `<details class="pagas"><summary class="nota-texto">Já pagas (${pagas.length})</summary><ul class="lista">${pagas.map((c) => linhaConta(c, d.mes)).join("")}</ul></details>` : ""}
+      <p class="nota-texto">Normalmente você não precisa marcar nada: o app reconhece o pagamento no extrato do mesmo mês. Pagou adiantado ou atrasado (ex.: em 28/09 a conta que vence 10/10)? Toque em “Já paguei” e escolha o pagamento. Tocar numa conta abre os detalhes para ajustar valor, dia de vencimento ou o texto que aparece no extrato.</p>
     </div>
 
     <div class="cartao">

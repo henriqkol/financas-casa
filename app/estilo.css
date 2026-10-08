@@ -823,3 +823,6 @@ label.campo > span { font-family: var(--font-mono); font-size: 11px; letter-spac
 /* Botão do Google: logo colorido no lugar do ponto vermelho */
 .botao.botao-google::before { display: none; }
 .botao-google .logo-google { width: 20px; height: 20px; flex: none; }
+
+/* "Já paguei" nas contas em aberto (Metas → Mês) */
+.conta-mes .botao-paguei { margin-top: 8px; min-height: 34px; padding: 6px 14px; }

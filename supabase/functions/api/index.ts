@@ -998,6 +998,12 @@ async function dadosEMetas(mesPedido?: string) {
   const p = Object.fromEntries((prefs as any[]).map((x) => [x.chave, x.valor]));
   const idsAcordos = (acordos as any[]).map((a) => a.id);
   const pagamentos = idsAcordos.length ? ok(await db.from("divida_pagamentos").select("divida_id, data, valor").in("divida_id", idsAcordos)) as any[] : [];
+  // Pagamentos ligados à mão a contas do plano (preferência "pagamentos_conta": {transacao_id: {item, mes}})
+  let mapaLigados: Record<string, { item: number; mes: string }> = {};
+  try { mapaLigados = JSON.parse(p.pagamentos_conta ?? "{}") ?? {}; } catch { /* valor inválido: ignora */ }
+  const idsLigadosMes = Object.entries(mapaLigados).filter(([, v]) => v?.mes === mes).map(([id]) => id);
+  const txLigadas = idsLigadosMes.length ? ok(await db.from("transacoes").select("id, data, valor").in("id", idsLigadosMes).eq("removida", false)) as any[] : [];
+  const ligados = txLigadas.map((t) => ({ item_id: Number(mapaLigados[t.id].item), tx: { id: t.id, data: t.data, valor: Number(t.valor) } }));
   const colchaoContas = (contas as any[]).filter((c) => c.tipo === "BANK" && Number(c.saldo) > 0).reduce((s, c) => s + Number(c.saldo), 0);
   const colchaoInvest = (invs as any[]).filter((i) => i.status !== "TOTAL_WITHDRAWAL").reduce((s, i) => s + Number(i.saldo_liquido ?? 0), 0);
   const colchao = colchaoContas + colchaoInvest;
@@ -1020,6 +1026,7 @@ async function dadosEMetas(mesPedido?: string) {
     objetivos: (objetivos as any[]).map((o) => ({ ...o, valor_alvo: o.valor_alvo != null ? Number(o.valor_alvo) : null, valor_atual: o.valor_atual != null ? Number(o.valor_atual) : null })),
     inicio_relogio: p.acordos_ultimo_atraso ?? "2026-09-28",
     inicio_plano: p.plano_inicio ?? "2026-10-01",
+    ligados, ligados_ids: Object.keys(mapaLigados),
   });
   // Atraso quebra a sequência de meses em dia: o relógio recomeça a partir de hoje
   if (!historico && r.atraso_acordo && p.acordos_ultimo_atraso !== hoje) {

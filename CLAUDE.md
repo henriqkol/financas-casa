@@ -78,3 +78,8 @@ Ver `docs/BASE.md` para as visões e consultas prontas.
 ## Login só pelo Google (v1.18, 04/10/2026)
 - App: tela de login só tem "Entrar com Google"; sessões abertas por senha (amr ≠ oauth) são encerradas ao abrir.
 - Banco (0015_so_google.sql, aplicada): trigger em auth.users bloqueia cadastro por e-mail e definir senha; trigger em auth.mfa_amr_claims bloqueia login por senha/OTP/link mágico. Exceção: public.e_robo(email) = robo-casa-N@financas-casa.app (robôs do agendamento entram com senha). O provedor de e-mail precisa continuar ligado por causa dos robôs.
+
+## Conta paga fora do mês (v1.19, 07/10/2026)
+- Ligação manual pagamento → conta do plano em preferencias "pagamentos_conta" = {transacao_id: {item, mes}}.
+- metas.ts: ligados (deste mês, com dados da transação de qualquer data) quitam a conta; ligados_ids (todos) saem do reconhecimento automático.
+- App: detalhe do lançamento → cartão "Conta do plano" (Ligar/Trocar/Desligar); Metas → Mês → "Já paguei" nas contas em aberto.

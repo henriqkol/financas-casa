@@ -31,6 +31,11 @@ export interface DadosMetas {
   objetivos: Objetivo[];
   inicio_relogio: string;                                         // último atraso ou 28/09/2026
   inicio_plano?: string;                                          // antes disso, conta não paga não é "atrasada"
+  // Pagamentos ligados à mão a uma conta (ex.: pago em 28/09 a conta que vence 10/10).
+  // ligados: os deste mês (com os dados da transação, que pode ser de outro mês);
+  // ligados_ids: todos os ligados de qualquer mês, que ficam fora do reconhecimento automático.
+  ligados?: { item_id: number; tx: { id: string; data: string; valor: number } }[];
+  ligados_ids?: string[];
 }
 
 const arred = (v: number) => Math.round(v * 100) / 100;
@@ -97,21 +102,25 @@ export function montarMetas(d: DadosMetas) {
   const contas: {
     tipo: "conta" | "acordo"; nome: string; valor: number; dia: number | null; data: string | null;
     status: "pago" | "parcial" | "atrasado" | "hoje" | "pendente"; pago_em: string | null; pago_valor?: number; forma: string | null; ref: number;
+    manual?: boolean; transacoes?: string[];
   }[] = [];
+  const foraDoAuto = new Set(d.ligados_ids ?? []);
   for (const g of d.grupos) for (const i of g.itens) {
     if (i.tipo !== "conta" || (i.periodicidade_meses ?? 1) !== 1 || !(i.valor > 0)) continue;
+    const manuais = (d.ligados ?? []).filter((l) => l.item_id === i.id).map((l) => l.tx);
     const re = compilarPadrao(i.padrao);
-    const candidatos = re ? d.saidas_mes.filter((t) => !usadas.has(t.id) && re.test(normalizar(t.texto))) : [];
+    const candidatos = manuais.length || !re ? [] : d.saidas_mes.filter((t) => !usadas.has(t.id) && !foraDoAuto.has(t.id) && re.test(normalizar(t.texto)));
     // 1) um pagamento com valor parecido; 2) vários pagamentos que somados cobrem a conta (ex.: Pix para duas pessoas)
     const unico = candidatos.find((t) => Math.abs(t.valor - i.valor) <= Math.max(i.valor * 0.3, 10));
     // soma muito acima da conta (mais de 1,5×) indica outro pagamento ao mesmo favorecido: não conta
     const somaTodos = arred(candidatos.reduce((s, t) => s + t.valor, 0));
     const todosServem = candidatos.length > 0 && somaTodos <= i.valor * 1.5;
     // entre "um pagamento" e "todos somados", fica o que chega mais perto do valor da conta
-    const usados = unico && !(todosServem && Math.abs(somaTodos - i.valor) < Math.abs(unico.valor - i.valor)) ? [unico] : todosServem ? candidatos : [];
+    const usados = manuais.length ? manuais : unico && !(todosServem && Math.abs(somaTodos - i.valor) < Math.abs(unico.valor - i.valor)) ? [unico] : todosServem ? candidatos : [];
     const pagoTotal = arred(usados.reduce((s, t) => s + t.valor, 0));
     // Paga quando o que saiu chega a 60% do previsto (o valor real pode variar; a tela mostra quanto foi)
-    const quitada = !!unico || (usados.length > 0 && pagoTotal >= i.valor * 0.6);
+    // ligado à mão: a pessoa disse que esta conta está paga
+    const quitada = manuais.length > 0 || !!unico || (usados.length > 0 && pagoTotal >= i.valor * 0.6);
     if (quitada) usados.forEach((t) => usadas.add(t.id));
     const data = i.dia_vencimento ? `${mes}-${String(Math.min(i.dia_vencimento, 28)).padStart(2, "0")}` : null;
     const antesDoPlano = !!d.inicio_plano && mes < mesDe(d.inicio_plano);
@@ -120,6 +129,7 @@ export function montarMetas(d: DadosMetas) {
       tipo: "conta", nome: i.nome, valor: i.valor, dia: i.dia_vencimento, data,
       status: quitada ? "pago" : pagoTotal > 0 ? "parcial" : data && data < d.hoje && !antesDoPlano ? "atrasado" : data === d.hoje ? "hoje" : "pendente",
       pago_em: quitada || pagoTotal > 0 ? ultimo : null, pago_valor: pagoTotal, forma: i.forma_pagamento, ref: i.id,
+      manual: manuais.length > 0, transacoes: usados.map((t) => t.id),
     });
   }
   for (const a of d.acordos) {
