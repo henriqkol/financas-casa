@@ -3165,7 +3165,9 @@ function sessaoPeloGoogle(session) {
 
 // ------------------------------------------------------------------ início do app
 async function iniciar() {
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
+  try {   // atualizacao.js marca quando o app recarregou por causa de uma versão nova
+    if (sessionStorage.getItem("app-atualizado")) { sessionStorage.removeItem("app-atualizado"); setTimeout(() => avisar(`App atualizado para a versão ${VERSAO}`), 1200); }
+  } catch { /* sem armazenamento */ }
   if (SUPABASE_URL.includes("SEU-PROJETO")) {
     app.innerHTML = `<div class="vazio"><strong>App ainda não configurado</strong>Preencha o endereço do Supabase em app/config.js.</div>`;
     return;

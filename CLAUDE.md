@@ -83,3 +83,7 @@ Ver `docs/BASE.md` para as visões e consultas prontas.
 - Ligação manual pagamento → conta do plano em preferencias "pagamentos_conta" = {transacao_id: {item, mes}}.
 - metas.ts: ligados (deste mês, com dados da transação de qualquer data) quitam a conta; ligados_ids (todos) saem do reconhecimento automático.
 - App: detalhe do lançamento → cartão "Conta do plano" (Ligar/Trocar/Desligar); Metas → Mês → "Já paguei" nas contas em aberto.
+
+## Atualização automática (v1.20, 13/10/2026)
+- app/atualizacao.js (script clássico, independente de app.js) registra o sw.js com updateViaCache "none", procura versão nova ao voltar para a tela, ao reconectar e a cada 30 min, e recarrega no controllerchange (espera fechar a folha aberta). Marca sessionStorage "app-atualizado" e app.js mostra "App atualizado para a versão X".
+- sw.js: install com cache "reload"; arquivos do app buscados com cache "no-cache" (revalida, sem misturar versões).
