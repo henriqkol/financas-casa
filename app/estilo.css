@@ -826,3 +826,38 @@ label.campo > span { font-family: var(--font-mono); font-size: 11px; letter-spac
 
 /* "Já paguei" nas contas em aberto (Metas → Mês) */
 .conta-mes .botao-paguei { margin-top: 8px; min-height: 34px; padding: 6px 14px; }
+
+/* =====================================================================
+   Alinhamento com o Crocante (v1.21.0, 13/10/2026): mesma barra inferior,
+   alvos de toque de 44px, setas do mês em SVG e logotipo no Início.
+   ===================================================================== */
+/* Logotipo tipográfico acima do título do Início */
+.titulo-topo { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.logo-app { display: inline-flex; align-items: center; gap: 8px; font-family: var(--font-display); font-weight: 900; font-size: 18px; letter-spacing: .02em; color: var(--fg); line-height: 1; }
+.logo-app b { color: var(--signal); font-weight: 900; }
+
+/* Cabeçalho pode quebrar linha em telas estreitas (título + olho + seletor de mês) */
+.topo { flex-wrap: wrap; row-gap: 10px; }
+
+/* Seletor de mês: botões de 44px com setas em SVG */
+.seletor-mes, .topo .seletor-mes { padding: 0; gap: 0; min-height: 0; }
+.seletor-mes button, .topo .seletor-mes button, .topo:has(.olho) .seletor-mes button {
+  width: 44px; height: 44px; border-radius: var(--radius-pill); display: inline-flex; align-items: center; justify-content: center; padding: 0; }
+.seletor-mes button svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.6; }
+.topo .olho, .olho { min-width: 44px; min-height: 44px; }
+
+/* Abas, filtros e botões pequenos: mínimo de 44px de altura */
+.seg button, .topo + .seg button, .seg-peq button { min-height: 44px; }
+.filtro, .filtro.ativo { min-height: 44px; }
+.conta-mes .botao-paguei, .botao.peq { min-height: 44px; }
+
+/* Barra inferior igual à do Crocante: cinco abas iguais, ícones de traço 1,6 com cantos retos,
+   rótulo mono e ponto vermelho na ativa. "Adicionar" vira uma aba comum (sem círculo vermelho nem sombra). */
+#abas button svg { stroke-width: 1.6; stroke-linecap: butt; stroke-linejoin: miter; }
+#abas button span { font-size: 10px; letter-spacing: .08em; }
+#abas .aba-central { flex: 1; }
+#abas .aba-central svg { width: 24px; height: 24px; padding: 0; margin-top: 0; border-radius: 0; background: none; stroke: currentColor; box-shadow: none; }
+#abas .aba-central span { font-size: 10px; font-weight: 400; color: inherit; }
+
+/* Iniciais do extrato em mono (Doto fica só para o logotipo e os números grandes) */
+.avatar { font-family: var(--font-mono); font-weight: 400; font-size: 13px; letter-spacing: .04em; }

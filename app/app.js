@@ -327,9 +327,14 @@ acoes.fecharFolha = () => fecharFolha();
 function carregando() { return `<div class="esqueleto" aria-busy="true" aria-label="Carregando"><div class="sk sk-grande"></div><div class="sk"></div><div class="sk"></div><div class="sk sk-curto"></div></div>`; }
 
 function mesCurto(m) { const [a, b] = m.split("-").map(Number); return maiuscula(new Date(a, b - 1, 1).toLocaleDateString("pt-BR", { month: "short" }).replace(".", "")) + " " + a; }
-function topoMes(titulo) {
-  return `<div class="topo"><h1>${titulo}</h1>${botaoOlho()}
-    <div class="seletor-mes"><button data-acao="mesAnterior" aria-label="Mês anterior">‹</button><span>${mesCurto(estado.mes)}</span><button data-acao="mesSeguinte" aria-label="Próximo mês">›</button></div></div>`;
+/** Setas do seletor de mês em SVG (traço 1,6, como os ícones da barra), no lugar dos caracteres ‹ ›. */
+const SETA_ESQ = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg>`;
+const SETA_DIR = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>`;
+/** Cabeçalho com seletor de mês; `marca` põe o logotipo "✱ FINANÇAS" acima do título (Início). */
+function topoMes(titulo, marca = false) {
+  const t = marca ? `<div class="titulo-topo"><span class="logo-app" aria-hidden="true"><b>*</b>FINANÇAS</span><h1>${titulo}</h1></div>` : `<h1>${titulo}</h1>`;
+  return `<div class="topo">${t}${botaoOlho()}
+    <div class="seletor-mes"><button data-acao="mesAnterior" aria-label="Mês anterior">${SETA_ESQ}</button><span>${mesCurto(estado.mes)}</span><button data-acao="mesSeguinte" aria-label="Próximo mês">${SETA_DIR}</button></div></div>`;
 }
 acoes.mesAnterior = () => { estado.mes = somarMes(estado.mes, -1); recarregar(); };
 acoes.mesSeguinte = () => { estado.mes = somarMes(estado.mes, 1); recarregar(); };
@@ -365,7 +370,7 @@ const ICONE = {
   nota: `<svg viewBox="0 0 24 24"><path d="M6 3h12v18l-3-2-3 2-3-2-3 2zM9 8h6M9 12h6"/></svg>`,
 };
 async function telaInicio() {
-  app.innerHTML = topoMes("Resumo") + `<div id="conteudo">${carregando()}</div>`;
+  app.innerHTML = topoMes("Resumo", true) + `<div id="conteudo">${carregando()}</div>`;
   const ant = somarMes(estado.mes, -1);
   const [linhas, anteriores, pend, ultimo, invs, divs, receitas, receitasAnt, contasSaldo] = await Promise.all([
     todas(() => sb.from("v_gastos").select("transacao_id, data, categoria_id, categoria, valor, conta_como_gasto, via_nota").eq("mes", estado.mes), CHAVE_VG),
@@ -2629,7 +2634,7 @@ const mesAno = (d) => { const [a, m] = d.split("-"); return `${m}/${a}`; };
 async function telaMetas() {
   const aba = estado.abaMetas ?? "mes";
   const mes = estado.mes > mesAtual() ? mesAtual() : estado.mes;   // o mesmo mês do Início (o plano vai até o mês atual)
-  const seletor = aba === "mes" ? `<div class="seletor-mes"><button data-acao="mesMetasAnterior" aria-label="Mês anterior">‹</button><span>${mesCurto(mes)}</span><button data-acao="mesMetasSeguinte" aria-label="Próximo mês" ${mes >= mesAtual() ? "disabled" : ""}>›</button></div>` : "";
+  const seletor = aba === "mes" ? `<div class="seletor-mes"><button data-acao="mesMetasAnterior" aria-label="Mês anterior">${SETA_ESQ}</button><span>${mesCurto(mes)}</span><button data-acao="mesMetasSeguinte" aria-label="Próximo mês" ${mes >= mesAtual() ? "disabled" : ""}>${SETA_DIR}</button></div>` : "";
   app.innerHTML = `<div class="topo"><h1>Metas</h1>${botaoOlho()}${seletor}</div>
     <div class="seg">${[["mes", "Mês"], ["acordos", "Acordos"], ["objetivos", "Objetivos"]].map(([k, n]) =>
       `<button class="${aba === k ? "ativo" : ""}" data-acao="abaMetas" data-s="${k}">${n}</button>`).join("")}</div>
