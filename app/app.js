@@ -259,6 +259,52 @@ abas.addEventListener("click", (e) => {
   if (b) irPara(b.dataset.aba);
 });
 
+// ------------------------------------------------------------------ BARRA SUPERIOR (como a do Crocante)
+const barra = document.getElementById("barra");
+/** Mostra ou esconde a navegação (barra superior + barra inferior) juntas. */
+function mostrarNavegacao(visivel) {
+  abas.hidden = !visivel;
+  barra.hidden = !visivel;
+  document.body.classList.toggle("com-barra", visivel);
+}
+function iniciais(nome, email) { return (String(nome || email || "?").trim()[0] ?? "?").toUpperCase(); }
+function avatarUsuario(classe = "") {
+  return estado.foto ? `<img src="${esc(estado.foto)}" alt="" referrerpolicy="no-referrer">` : `<span class="${classe}">${esc(iniciais(estado.nome, estado.email))}</span>`;
+}
+function montarBarra() {
+  barra.innerHTML = `<button class="logo" data-acao="irInicio" aria-label="Finanças da Casa, ir para o Início"><img src="icons/dolar-192.png" alt=""><span>FINANÇAS<b>*</b></span></button>
+    <div class="barra-acoes">${botaoOlho()}
+      <button class="avatar-usuario" data-acao="abrirMenuUsuario" aria-label="Menu do usuário: ${esc(estado.nome || estado.email || "")}" aria-haspopup="dialog">${avatarUsuario()}</button></div>`;
+}
+acoes.irInicio = () => irPara("inicio");
+acoes.abrirMenuUsuario = () => {
+  const casa = estado.casa?.nome ? `Casa ${esc(estado.casa.nome)}` : "";
+  const item = (secao, icone, rotulo, info = "") => `<button class="item-menu" data-acao="menuUsuarioIr" data-secao="${secao}">${icone}<span>${rotulo}</span>${info ? `<small>${info}</small>` : ""}<span class="seta" aria-hidden="true">↗</span></button>`;
+  abrirFolha(`<div class="menu-usuario">
+    <div class="usuario-cab"><span class="avatar-usuario grande" aria-hidden="true">${avatarUsuario()}</span>
+      <div class="corpo"><strong>${esc(estado.nome || estado.email || "")}</strong>${estado.nome ? `<span>${esc(estado.email)}</span>` : ""}${casa ? `<span class="rotulo">${casa}</span>` : ""}</div></div>
+    <nav aria-label="Conta">
+      ${item("secaoCasa", ICONE_MENU.casa, "Casa e convites")}
+      ${item("secaoAparencia", ICONE_MENU.tema, "Aparência", TEMAS.find(([k]) => k === temaAtual())?.[1].toLowerCase() ?? "")}
+      ${item("secaoNotificacoes", ICONE_MENU.sino, "Notificações")}
+      ${item("", ICONE_MENU.ajustes, "Todas as configurações")}
+    </nav>
+    <button class="botao sec perigo" data-acao="sair">Sair da conta</button>
+    <p class="nota-texto versao">Versão ${VERSAO}</p></div>`);
+};
+const ICONE_MENU = {
+  casa: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11l9-7 9 7v9H3z"/><path d="M10 20v-5h4v5"/></svg>`,
+  tema: `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 4v16"/><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor"/></svg>`,
+  sino: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4zM10 21h4"/></svg>`,
+  ajustes: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><path d="M14 4v4M8 10v4M16 16v4"/></svg>`,
+};
+acoes.menuUsuarioIr = async (el) => {
+  estado.abrirSecao = el.dataset.secao || null;
+  fecharFolha();
+  await new Promise((r) => setTimeout(r, 60)); // deixa o "voltar" da folha terminar antes de trocar de tela
+  irPara("mais");
+};
+
 function pararLeitor() { estado.leitor?.parar(); estado.leitor = null; }
 
 async function irPara(aba, manterRolagem = false) {
@@ -330,11 +376,22 @@ function mesCurto(m) { const [a, b] = m.split("-").map(Number); return maiuscula
 /** Setas do seletor de mês em SVG (traço 1,6, como os ícones da barra), no lugar dos caracteres ‹ ›. */
 const SETA_ESQ = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg>`;
 const SETA_DIR = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>`;
-/** Cabeçalho com seletor de mês; `marca` põe o logotipo "✱ FINANÇAS" acima do título (Início). */
-function topoMes(titulo, marca = false) {
-  const t = marca ? `<div class="titulo-topo"><span class="logo-app" aria-hidden="true"><b>*</b>FINANÇAS</span><h1>${titulo}</h1></div>` : `<h1>${titulo}</h1>`;
-  return `<div class="topo">${t}${botaoOlho()}
-    <div class="seletor-mes"><button data-acao="mesAnterior" aria-label="Mês anterior">${SETA_ESQ}</button><span>${mesCurto(estado.mes)}</span><button data-acao="mesSeguinte" aria-label="Próximo mês">${SETA_DIR}</button></div></div>`;
+function seletorMes() {
+  return `<div class="seletor-mes"><button data-acao="mesAnterior" aria-label="Mês anterior">${SETA_ESQ}</button><span>${mesCurto(estado.mes)}</span><button data-acao="mesSeguinte" aria-label="Próximo mês">${SETA_DIR}</button></div>`;
+}
+/** Cabeçalho de tela com seletor de mês (o olho fica na barra superior). */
+function topoMes(titulo) {
+  return `<div class="topo"><h1>${titulo}</h1>${seletorMes()}</div>`;
+}
+/** Data de hoje como no Crocante: "QUARTA · 14 DE OUTUBRO". */
+const DIAS_SEMANA = ["DOMINGO", "SEGUNDA", "TERÇA", "QUARTA", "QUINTA", "SEXTA", "SÁBADO"];
+function dataLonga(d = new Date()) {
+  return `${DIAS_SEMANA[d.getDay()]} · ${d.getDate()} DE ${d.toLocaleDateString("pt-BR", { month: "long" }).toUpperCase()}`;
+}
+/** Cabeçalho do Início: data (eyebrow), título "Resumo do mês" e seletor de mês. */
+function topoInicio() {
+  return `<div class="topo topo-cabeca"><div class="cabeca"><div class="eyebrow">${esc(dataLonga())}</div>
+    <h1 class="h1">Resumo do <span class="realce">mês</span></h1></div>${seletorMes()}</div>`;
 }
 acoes.mesAnterior = () => { estado.mes = somarMes(estado.mes, -1); recarregar(); };
 acoes.mesSeguinte = () => { estado.mes = somarMes(estado.mes, 1); recarregar(); };
@@ -370,7 +427,7 @@ const ICONE = {
   nota: `<svg viewBox="0 0 24 24"><path d="M6 3h12v18l-3-2-3 2-3-2-3 2zM9 8h6M9 12h6"/></svg>`,
 };
 async function telaInicio() {
-  app.innerHTML = topoMes("Resumo", true) + `<div id="conteudo">${carregando()}</div>`;
+  app.innerHTML = topoInicio() + `<div id="conteudo">${carregando()}</div>`;
   const ant = somarMes(estado.mes, -1);
   const [linhas, anteriores, pend, ultimo, invs, divs, receitas, receitasAnt, contasSaldo] = await Promise.all([
     todas(() => sb.from("v_gastos").select("transacao_id, data, categoria_id, categoria, valor, conta_como_gasto, via_nota").eq("mes", estado.mes), CHAVE_VG),
@@ -1619,7 +1676,7 @@ async function verificarBiometria() {
 }
 let desbloqueado = false, escondidoEm = null, aoDesbloquear = null;
 function telaBloqueio(msg = "") {
-  abas.hidden = true;
+  mostrarNavegacao(false);
   document.body.classList.add("bloqueado");
   let el = $("#telaBloqueio");
   if (!el) { el = document.createElement("div"); el.id = "telaBloqueio"; document.body.appendChild(el); }
@@ -1646,7 +1703,7 @@ acoes.desbloquear = async () => {
     document.body.classList.remove("bloqueado", "fundo-privado");
     $("#telaBloqueio")?.remove();
     const f = aoDesbloquear; aoDesbloquear = null;
-    if (f) f(); else abas.hidden = false;
+    if (f) f(); else mostrarNavegacao(true);
   } catch (e) {
     if ($("#telaBloqueio")) telaBloqueio(e?.name === "NotAllowedError" ? "" : "Não deu certo. Tente de novo.");
   }
@@ -1660,7 +1717,7 @@ document.addEventListener("visibilitychange", () => {
     document.body.classList.remove("fundo-privado");
     if (escondidoEm && Date.now() - escondidoEm > TEMPO_FORA) {
       desbloqueado = false;
-      exigirDesbloqueio().then(() => { abas.hidden = false; });
+      exigirDesbloqueio().then(() => { mostrarNavegacao(true); });
     }
     escondidoEm = null;
   }
@@ -2046,6 +2103,7 @@ async function telaMais() {
   const campoRegra = $("#buscaRegra");
   if (campoRegra) { let t; campoRegra.addEventListener("input", () => { clearTimeout(t); t = setTimeout(() => { $("#listaRegras").innerHTML = htmlListaRegras(campoRegra.value); }, 150); }); }
   if (estado.abrirCategorias) { estado.abrirCategorias = false; $("#secaoCategorias")?.scrollIntoView({ block: "start" }); }
+  if (estado.abrirSecao) { const d = $(`#${estado.abrirSecao}`); estado.abrirSecao = null; if (d) { d.open = true; d.scrollIntoView({ block: "start" }); } }
   if (estado.abrirOpenFinance) { estado.abrirOpenFinance = false; $("#secaoOpenFinance")?.scrollIntoView({ block: "start" }); }
 }
 acoes.salvarPluggy = async (el) => {
@@ -2265,7 +2323,7 @@ function ativarGraficos(raiz = document) {
 
 async function telaPatrimonio() {
   const sub = estado.abaPatrimonio ?? "investimentos";
-  app.innerHTML = `<div class="topo"><h1>Patrimônio</h1>${botaoOlho()}</div>
+  app.innerHTML = `<div class="topo"><h1>Patrimônio</h1></div>
     <div class="seg"><button class="${sub === "investimentos" ? "ativo" : ""}" data-acao="abaPatrimonio" data-s="investimentos">Investimentos</button>
     <button class="${sub === "dividas" ? "ativo" : ""}" data-acao="abaPatrimonio" data-s="dividas">Dívidas</button></div>
     <div id="conteudo">${carregando()}</div>`;
@@ -2635,7 +2693,7 @@ async function telaMetas() {
   const aba = estado.abaMetas ?? "mes";
   const mes = estado.mes > mesAtual() ? mesAtual() : estado.mes;   // o mesmo mês do Início (o plano vai até o mês atual)
   const seletor = aba === "mes" ? `<div class="seletor-mes"><button data-acao="mesMetasAnterior" aria-label="Mês anterior">${SETA_ESQ}</button><span>${mesCurto(mes)}</span><button data-acao="mesMetasSeguinte" aria-label="Próximo mês" ${mes >= mesAtual() ? "disabled" : ""}>${SETA_DIR}</button></div>` : "";
-  app.innerHTML = `<div class="topo"><h1>Metas</h1>${botaoOlho()}${seletor}</div>
+  app.innerHTML = `<div class="topo"><h1>Metas</h1>${seletor}</div>
     <div class="seg">${[["mes", "Mês"], ["acordos", "Acordos"], ["objetivos", "Objetivos"]].map(([k, n]) =>
       `<button class="${aba === k ? "ativo" : ""}" data-acao="abaMetas" data-s="${k}">${n}</button>`).join("")}</div>
     <div id="conteudo">${carregando()}</div>`;
@@ -3030,7 +3088,7 @@ const PERIODOS = { 1: "por mês", 2: "a cada 2 meses", 3: "por trimestre", 6: "p
 acoes.irCategorias = (el, e) => { e?.preventDefault?.(); estado.abrirCategorias = true; irPara("mais"); };
 
 async function telaSugestoes() {
-  app.innerHTML = `<div class="topo"><h1>Sugestões</h1>${botaoOlho()}<button class="botao peq sec" data-acao="abrirPreferencias">Ajustar plano</button></div>
+  app.innerHTML = `<div class="topo"><h1>Sugestões</h1><button class="botao peq sec" data-acao="abrirPreferencias">Ajustar plano</button></div>
     <div id="conteudo">${carregando()}</div>`;
   let d;
   try { d = await obterSugestoes(true); }
@@ -3139,7 +3197,7 @@ acoes.salvarPreferencias = async (el) => {
 
 // ------------------------------------------------------------------ LOGIN
 function telaLogin(msg = "") {
-  abas.hidden = true;
+  mostrarNavegacao(false);
   app.innerHTML = `<div class="login">
     <div class="marca"><img src="icons/dolar-192.png" alt=""><div><h1>Finanças da Casa</h1><div class="nota-texto">Open Finance + notas fiscais</div></div></div>
     <div class="cartao">
@@ -3202,6 +3260,9 @@ async function iniciar() {
     return telaLogin();
   }
   estado.email = session.user.email?.toLowerCase();
+  const meta = session.user.user_metadata ?? {};
+  estado.nome = meta.full_name ?? meta.name ?? null;
+  estado.foto = meta.avatar_url ?? meta.picture ?? null;
   if (bloqueioSalvo() && !desbloqueado) await exigirDesbloqueio();
   desbloqueado = true;
 
@@ -3229,7 +3290,8 @@ async function iniciar() {
   guardarCasa(casa);
   if (casa.convite_aceito) setTimeout(() => avisar(`Você agora participa da casa "${casa.nome}" (convite)`), 800);
   await carregarCategorias();
-  abas.hidden = false;
+  montarBarra();
+  mostrarNavegacao(true);
   const inicial = location.hash.replace("#", "");
   await irPara(["inicio", "gastos", "escanear", "notas", "mais", "patrimonio", "sugestoes", "metas"].includes(inicial) ? inicial : "inicio");
   processarFila();

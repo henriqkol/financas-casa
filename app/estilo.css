@@ -831,11 +831,6 @@ label.campo > span { font-family: var(--font-mono); font-size: 11px; letter-spac
    Alinhamento com o Crocante (v1.21.0, 13/10/2026): mesma barra inferior,
    alvos de toque de 44px, setas do mês em SVG e logotipo no Início.
    ===================================================================== */
-/* Logotipo tipográfico acima do título do Início */
-.titulo-topo { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
-.logo-app { display: inline-flex; align-items: center; gap: 8px; font-family: var(--font-display); font-weight: 900; font-size: 18px; letter-spacing: .02em; color: var(--fg); line-height: 1; }
-.logo-app b { color: var(--signal); font-weight: 900; }
-
 /* Cabeçalho pode quebrar linha em telas estreitas (título + olho + seletor de mês) */
 .topo { flex-wrap: wrap; row-gap: 10px; }
 
@@ -861,3 +856,85 @@ label.campo > span { font-family: var(--font-mono); font-size: 11px; letter-spac
 
 /* Iniciais do extrato em mono (Doto fica só para o logotipo e os números grandes) */
 .avatar { font-family: var(--font-mono); font-weight: 400; font-size: 13px; letter-spacing: .04em; }
+
+/* =====================================================================
+   Barra superior e inferior como as do Crocante (v1.22.0, 14/10/2026)
+   ===================================================================== */
+/* Barra superior fixa: ícone + "FINANÇAS*" à esquerda; olho e foto do usuário à direita */
+#barra { position: sticky; top: 0; z-index: 9; display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: calc(12px + env(safe-area-inset-top)) max(16px, calc((100% - 640px) / 2 + 16px)) 12px;
+  background: color-mix(in srgb, var(--ink) 84%, transparent); border-bottom: 1px solid var(--line);
+  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
+#barra[hidden] { display: none; }
+body.bloqueado #barra { display: none !important; }
+#barra .logo { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 0; border: 0; background: none; cursor: pointer;
+  font: 900 22px/1 var(--font-display); letter-spacing: .02em; color: var(--fg); text-decoration: none; }
+#barra .logo img { width: 26px; height: 26px; border-radius: 6px; }
+#barra .logo b { color: var(--signal); font-weight: 900; }
+.barra-acoes { display: flex; align-items: center; gap: 8px; }
+
+/* Olho: círculo de 44px com o ícone exatamente no centro */
+.olho, .topo .olho, #barra .olho { width: 44px; height: 44px; min-width: 44px; min-height: 44px; flex: 0 0 auto; margin: 0; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center; line-height: 0;
+  border: 1px solid var(--line); border-radius: 50%; background: transparent; color: var(--fg); }
+.olho > span { display: flex; align-items: center; justify-content: center; }
+.olho .fechado, body.oculto .olho .aberto { display: none; }
+body.oculto .olho .fechado { display: flex; }
+.olho svg { width: 18px; height: 18px; display: block; stroke-width: 1.6; stroke-linecap: butt; stroke-linejoin: miter; }
+
+/* Foto do usuário (Google) ou inicial sobre o vermelho */
+.avatar-usuario { width: 44px; height: 44px; flex: 0 0 auto; padding: 0; border: 0; border-radius: 50%; overflow: hidden; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center; background: var(--signal); color: #fff; font: 600 16px/1 var(--font-body); }
+.avatar-usuario img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.avatar-usuario.grande { width: 56px; height: 56px; font-size: 20px; cursor: default; }
+
+/* Com a barra, o cabeçalho de cada tela fica logo abaixo dela, sem a linha (como a "cabeça" do Crocante) */
+body.com-barra #app { padding-top: 0; }
+body.com-barra .topo, body.com-barra .topo:has(+ .seg), body.com-barra .topo:has(+ #conteudo > .destaque:first-child) {
+  margin: 0 0 18px; padding: 22px 0 0; border-bottom: 0; }
+
+/* Cabeçalho do Início: data com o traço vermelho, título grande com "mês" em Doto vermelho */
+.topo-cabeca { flex-direction: column; align-items: stretch; gap: 16px; }
+.cabeca { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.eyebrow { display: flex; align-items: center; gap: 14px; font: 400 12px/1.4 var(--font-mono); letter-spacing: .14em; color: var(--fg-mute); text-transform: uppercase; }
+.eyebrow::before { content: ""; width: 32px; height: 1px; background: var(--signal); flex: 0 0 auto; }
+.topo .h1, .h1 { font-size: clamp(30px, 8.5vw, 38px); line-height: 1.03; font-weight: 500; letter-spacing: -.045em; white-space: normal; overflow: visible; text-wrap: balance; }
+.realce { font-family: var(--font-display); font-weight: 900; color: var(--signal); letter-spacing: -.02em; }
+.topo-cabeca .seletor-mes { align-self: flex-start; }
+
+/* Menu do usuário (folha) */
+.menu-usuario { display: flex; flex-direction: column; gap: 18px; }
+.usuario-cab { display: flex; align-items: center; gap: 14px; padding-right: 48px; }
+.usuario-cab .corpo { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.usuario-cab strong { font-size: 18px; font-weight: 500; letter-spacing: -.02em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.usuario-cab span { font-size: 13px; color: var(--fg-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.usuario-cab .rotulo { font: 400 11px/1.4 var(--font-mono); letter-spacing: .12em; text-transform: uppercase; color: var(--fg-mute); }
+.menu-usuario nav { display: flex; flex-direction: column; border-top: 1px solid var(--fg); }
+.item-menu { display: flex; align-items: center; gap: 12px; min-height: 52px; padding: 0; border: 0; border-bottom: 1px solid var(--line);
+  background: none; color: var(--fg); font: 500 15px var(--font-body); text-align: left; cursor: pointer; }
+.item-menu svg { width: 20px; height: 20px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.6; }
+.item-menu > span:first-of-type { flex: 1; }
+.item-menu small { font: 400 11px var(--font-mono); letter-spacing: .1em; text-transform: uppercase; color: var(--fg-mute); }
+.item-menu .seta { font-family: var(--font-mono); font-size: 13px; color: var(--fg-mute); margin: 0; }
+.menu-usuario .botao { align-self: flex-start; }
+.menu-usuario .versao { margin: 0; font-family: var(--font-mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--fg-mute); }
+
+/* Barra inferior como a do Crocante: grade de 5 colunas, cada aba com o ícone centrado
+   no topo, rótulo mono embaixo e o ponto vermelho abaixo do rótulo na aba ativa */
+:root { --nav-h: 74px; }
+#abas, #abas[style] { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); align-items: start; justify-content: stretch;
+  max-width: none; margin: 0; height: auto; border: 0; border-top: 1px solid var(--line); border-radius: 0; box-shadow: none;
+  padding: 8px max(6px, calc((100% - 640px) / 2)) calc(10px + env(safe-area-inset-bottom));
+  background: color-mix(in srgb, var(--ink) 84%, transparent); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
+@media (min-width: 660px) { #abas { border: 0; border-top: 1px solid var(--line); border-radius: 0; } }
+#abas[hidden] { display: none; }
+#abas button, #abas .aba-central { flex: none; width: 100%; height: auto; min-height: 48px; margin: 0; padding: 6px 0 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: flex-start; gap: 5px;
+  border: 0; background: none; color: var(--fg-mute); cursor: pointer; position: relative; }
+#abas button svg, #abas .aba-central svg { width: 22px; height: 22px; margin: 0; padding: 0; border-radius: 0; background: none; box-shadow: none;
+  fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: butt; stroke-linejoin: miter; }
+#abas button span, #abas .aba-central span { font: 400 10px/1 var(--font-mono); letter-spacing: .08em; text-transform: uppercase; color: inherit; white-space: nowrap; }
+#abas button.ativa { color: var(--fg); }
+#abas button.ativa::before, #abas button.ativa:not(.aba-central)::before { content: none; display: none; }
+#abas button.ativa::after { content: ""; width: 4px; height: 4px; border-radius: 50%; background: var(--signal); }
+#abas button.ativa span { font-weight: 400; }

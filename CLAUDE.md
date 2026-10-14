@@ -50,11 +50,12 @@ App de controle financeiro doméstico do Rique (e da esposa). Tudo em português
 - Notas escaneadas offline vão para a fila `filaNotas` (localStorage) e são enviadas a `/nfce` quando a conexão volta (evento `online`, ao abrir o app e ao voltar para ele). Chave repetida não entra duas vezes; o servidor também ignora duplicadas.
 - O service worker guarda os arquivos do app, `vendor/jsQR.min.js` (leitor de QR local) e a biblioteca do Supabase.
 
-## Visual (GranDom desde v1.16.0; alinhado ao Crocante em v1.21.0)
+## Visual (GranDom desde v1.16.0; barras como as do Crocante em v1.22.0)
 - Design system GranDom (o mesmo do app Crocante e do canvas "Finanças da Casa — redesign mobile"): tokens no começo de `estilo.css` (`--ink`, `--paper`, `--fg`, `--signal`…); as variáveis antigas (`--hero`, `--ouro`, `--b1..b4`) só apontam para eles. Escuro é o padrão; claro pelo aparelho ou Mais → Aparência (`data-theme`).
 - Fontes locais em `app/fonts/` (Doto para logotipo e números grandes, Space Grotesk no texto, Space Mono nos rótulos em caixa alta). O CSS antigo (Bricolage/Plus Jakarta, faixa verde) continua no arquivo, mas é sobrescrito pelos blocos "GranDom" e "Alinhamento com o Crocante" no fim.
-- `.topo` fica sobre o fundo, com linha fina embaixo; o primeiro `.cartao.destaque` de `#conteudo` vira o painel "papel" invertido. Início tem o logotipo "✱ FINANÇAS" (`topoMes(titulo, true)`).
-- Barra inferior como a do Crocante: Início · Extrato (aba `gastos`) · Adicionar · Metas · Mais, cinco abas iguais, ícones de traço 1,6, rótulo mono e ponto vermelho na ativa (sem botão central elevado). Notas fiscais fica nos atalhos de Mais (`irNotas`).
+- Barra superior fixa `#barra` (index.html, montada por `montarBarra()` depois do login), igual à do Crocante: ícone + "FINANÇAS*" (volta ao Início), olho de ocultar valores (global, saiu dos cabeçalhos das telas) e foto do Google (`estado.foto`/`estado.nome` de `user_metadata`) que abre o menu do usuário (folha: Casa e convites, Aparência, Notificações, Todas as configurações → abrem a seção em Mais via `estado.abrirSecao`; Sair). `mostrarNavegacao(v)` mostra/esconde as duas barras juntas e põe `body.com-barra`.
+- Embaixo da barra, `.topo` é a "cabeça" da tela (sem linha). Início: `topoInicio()` = data de hoje em eyebrow ("QUARTA · 14 DE OUTUBRO", `dataLonga()`), título "Resumo do mês" com "mês" em Doto vermelho (`.realce`; não usar `.destaque`, que é dos cartões) e o seletor de mês. O primeiro `.cartao.destaque` de `#conteudo` vira o painel "papel" invertido.
+- Barra inferior como a do Crocante: grade de 5 colunas (Início · Extrato (aba `gastos`) · Adicionar · Metas · Mais), ícone de 22px centrado no topo de cada aba (casa = mesmo desenho do Crocante), rótulo mono e ponto vermelho abaixo do rótulo na ativa. Notas fiscais fica nos atalhos de Mais (`irNotas`).
 - Alvos de toque de no mínimo 44px (abas, filtros, seletor de mês com setas SVG `SETA_ESQ`/`SETA_DIR`, botões pequenos). Iniciais do extrato em Space Mono, sem cor por categoria.
 - Vermelho só para o que pede atenção (`--alerta` = `signal-2`); bom não tem cor. Dinheiro sempre por `R()`/`Rp()` (Intl pt-BR → "R$ 1.234,56").
 
