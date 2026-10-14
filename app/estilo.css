@@ -938,3 +938,15 @@ body.com-barra .topo, body.com-barra .topo:has(+ .seg), body.com-barra .topo:has
 #abas button.ativa::before, #abas button.ativa:not(.aba-central)::before { content: none; display: none; }
 #abas button.ativa::after { content: ""; width: 4px; height: 4px; border-radius: 50%; background: var(--signal); }
 #abas button.ativa span { font-weight: 400; }
+
+/* Início: "Resumo de ‹ outubro ›" (v1.23.0) — setas finas em cinza coladas ao mês, sem a pílula do seletor */
+.titulo-mes { display: flex; flex-direction: column; }
+.troca-mes { display: flex; align-items: center; margin-left: -12px; }
+.troca-mes .realce { line-height: 1.1; white-space: nowrap; }
+.troca-mes .realce { display: inline-flex; align-items: baseline; gap: 10px; }
+.troca-mes .ano-mes { font: 400 14px/1 var(--font-mono); letter-spacing: .12em; color: var(--fg-mute); }
+.troca-mes button { width: 36px; height: 44px; flex: none; padding: 0; border: 0; background: none; color: var(--fg-mute);
+  display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+.troca-mes button:hover:not(:disabled) { color: var(--fg); }
+.troca-mes button:disabled { opacity: .3; cursor: default; }
+.troca-mes button svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.6; }

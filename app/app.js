@@ -388,10 +388,18 @@ const DIAS_SEMANA = ["DOMINGO", "SEGUNDA", "TERÇA", "QUARTA", "QUINTA", "SEXTA"
 function dataHoje(d = new Date()) {
   return `${DIAS_SEMANA[d.getDay()]} · ${d.getDate()} DE ${d.toLocaleDateString("pt-BR", { month: "long" }).toUpperCase()}`;
 }
-/** Cabeçalho do Início: data (eyebrow), título "Resumo do mês" e seletor de mês. */
+/** Cabeçalho do Início: data de hoje (eyebrow) e "Resumo de ‹ outubro ›" — o mês em Doto vermelho, com as setas
+    de trocar mês coladas nele. O ano só aparece quando não é o atual; a seta da direita apaga no mês atual. */
 function topoInicio() {
+  const [a, m] = estado.mes.split("-").map(Number);
+  const nome = new Date(a, m - 1, 1).toLocaleDateString("pt-BR", { month: "long" }).toLowerCase();
+  const ano = a !== new Date().getFullYear() ? `<span class="ano-mes">${a}</span>` : "";
+  const ultimo = estado.mes >= mesAtual();
   return `<div class="topo topo-cabeca"><div class="cabeca"><div class="eyebrow">${esc(dataHoje())}</div>
-    <h1 class="h1">Resumo do <span class="realce">mês</span></h1></div>${seletorMes()}</div>`;
+    <h1 class="h1 titulo-mes">Resumo de<span class="troca-mes">
+      <button data-acao="mesAnterior" aria-label="Mês anterior">${SETA_ESQ}</button>
+      <span class="realce" aria-live="polite">${esc(nome)}${ano}</span>
+      <button data-acao="mesSeguinte" aria-label="Próximo mês" ${ultimo ? "disabled" : ""}>${SETA_DIR}</button></span></h1></div></div>`;
 }
 acoes.mesAnterior = () => { estado.mes = somarMes(estado.mes, -1); recarregar(); };
 acoes.mesSeguinte = () => { estado.mes = somarMes(estado.mes, 1); recarregar(); };
