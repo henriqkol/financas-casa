@@ -13,3 +13,6 @@ jobs:
         with:
           node-version: 22
       - run: node --experimental-strip-types --no-warnings --test tests/logica.test.ts
+      # O navegador carrega app.js como módulo ES: nome repetido ou erro de sintaxe trava o app no carregamento.
+      - name: Arquivos do app válidos como módulo
+        run: for f in app/app.js app/scanner.js app/config.js; do cp "$f" "$RUNNER_TEMP/chk.mjs" && node --check "$RUNNER_TEMP/chk.mjs" || exit 1; done

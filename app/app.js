@@ -385,12 +385,12 @@ function topoMes(titulo) {
 }
 /** Data de hoje como no Crocante: "QUARTA · 14 DE OUTUBRO". */
 const DIAS_SEMANA = ["DOMINGO", "SEGUNDA", "TERÇA", "QUARTA", "QUINTA", "SEXTA", "SÁBADO"];
-function dataLonga(d = new Date()) {
+function dataHoje(d = new Date()) {
   return `${DIAS_SEMANA[d.getDay()]} · ${d.getDate()} DE ${d.toLocaleDateString("pt-BR", { month: "long" }).toUpperCase()}`;
 }
 /** Cabeçalho do Início: data (eyebrow), título "Resumo do mês" e seletor de mês. */
 function topoInicio() {
-  return `<div class="topo topo-cabeca"><div class="cabeca"><div class="eyebrow">${esc(dataLonga())}</div>
+  return `<div class="topo topo-cabeca"><div class="cabeca"><div class="eyebrow">${esc(dataHoje())}</div>
     <h1 class="h1">Resumo do <span class="realce">mês</span></h1></div>${seletorMes()}</div>`;
 }
 acoes.mesAnterior = () => { estado.mes = somarMes(estado.mes, -1); recarregar(); };
